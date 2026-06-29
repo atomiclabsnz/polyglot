@@ -1292,6 +1292,30 @@ impl SelectBuilder {
         self
     }
 
+    /// Add an inner `JOIN` clause whose right side is an arbitrary expression
+    /// (e.g. an aliased subquery built via [`subquery_expr`]) rather than a bare
+    /// table name, with the given ON condition. Lets callers join a derived
+    /// table — `... JOIN (SELECT …) alias ON …` — which [`SelectBuilder::join`]
+    /// (table-name only) cannot express.
+    pub fn join_expr(mut self, this: Expr, on: Expr) -> Self {
+        self.select.joins.push(Join {
+            kind: JoinKind::Inner,
+            this: this.0,
+            on: Some(on.0),
+            using: Vec::new(),
+            use_inner_keyword: false,
+            use_outer_keyword: false,
+            deferred_condition: false,
+            join_hint: None,
+            match_condition: None,
+            pivots: Vec::new(),
+            comments: Vec::new(),
+            nesting_group: 0,
+            directed: false,
+        });
+        self
+    }
+
     /// Add a `LEFT JOIN` clause with the given ON condition.
     pub fn left_join(mut self, table_name: &str, on: Expr) -> Self {
         self.select.joins.push(Join {
