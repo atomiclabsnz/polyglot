@@ -1336,6 +1336,27 @@ impl SelectBuilder {
         self
     }
 
+    /// Add a `LEFT JOIN` clause whose right side is an arbitrary expression (an aliased
+    /// subquery), with the given ON condition — the `LEFT` companion of [`join_expr`].
+    pub fn left_join_expr(mut self, this: Expr, on: Expr) -> Self {
+        self.select.joins.push(Join {
+            kind: JoinKind::Left,
+            this: this.0,
+            on: Some(on.0),
+            using: Vec::new(),
+            use_inner_keyword: false,
+            use_outer_keyword: false,
+            deferred_condition: false,
+            join_hint: None,
+            match_condition: None,
+            pivots: Vec::new(),
+            comments: Vec::new(),
+            nesting_group: 0,
+            directed: false,
+        });
+        self
+    }
+
     /// Set the WHERE clause to filter rows by the given condition.
     ///
     /// Calling this multiple times replaces the previous WHERE condition. To combine
