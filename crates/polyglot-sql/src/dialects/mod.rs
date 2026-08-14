@@ -4561,6 +4561,12 @@ impl Dialect {
                         "qualified whole-row aggregate arguments",
                     );
                 }
+                if Self::node_has_subquery_in_aggregate_argument(node) {
+                    Self::push_unsupported_diagnostic(
+                        &mut diagnostics,
+                        "aggregate arguments containing subqueries",
+                    );
+                }
             }
 
             if !Self::target_supports_distinct_on(target) && Self::node_has_distinct_on(node) {
@@ -5444,6 +5450,21 @@ impl Dialect {
 
         Self::node_is_aggregate_function(expr)
             && expr.children().into_iter().any(contains_qualified_star)
+    }
+
+    fn node_has_subquery_in_aggregate_argument(expr: &Expression) -> bool {
+        fn contains_query(expr: &Expression) -> bool {
+            matches!(
+                expr,
+                Expression::Select(_)
+                    | Expression::Subquery(_)
+                    | Expression::Union(_)
+                    | Expression::Intersect(_)
+                    | Expression::Except(_)
+            ) || expr.children().into_iter().any(contains_query)
+        }
+
+        Self::node_is_aggregate_function(expr) && expr.children().into_iter().any(contains_query)
     }
 
     fn tsql_apply_has_invalid_outer_aggregate(expr: &Expression) -> bool {

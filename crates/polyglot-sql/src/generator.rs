@@ -37817,6 +37817,48 @@ impl Generator {
         }
     }
 
+    fn postgres_tsql_literal_string(expr: &Expression) -> Option<Cow<'_, str>> {
+        match expr {
+            Expression::Literal(literal) => match literal.as_ref() {
+                Literal::String(value) => Some(Cow::Borrowed(value)),
+                _ => None,
+            },
+            Expression::Cast(cast) | Expression::TryCast(cast) | Expression::SafeCast(cast)
+                if Self::is_string_data_type(&cast.to) =>
+            {
+                let value = Self::postgres_tsql_literal_string(&cast.this)?;
+                match &cast.to {
+                    DataType::Char { length } => Some(Self::postgres_string_cast_literal(
+                        value,
+                        length.unwrap_or(1),
+                    )),
+                    DataType::VarChar {
+                        length: Some(length),
+                        ..
+                    }
+                    | DataType::String {
+                        length: Some(length),
+                    } => Some(Self::postgres_string_cast_literal(value, *length)),
+                    DataType::TextWithLength { length } => {
+                        Some(Self::postgres_string_cast_literal(value, *length))
+                    }
+                    _ => Some(value),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn postgres_string_cast_literal(value: Cow<'_, str>, length: u32) -> Cow<'_, str> {
+        let length = length as usize;
+        let value_length = value.chars().count();
+        if value_length > length {
+            Cow::Owned(value.chars().take(length).collect())
+        } else {
+            value
+        }
+    }
+
     fn postgres_year_is_outside_tsql_range(value: &str, format: &str) -> bool {
         fn component_is_outside(component: &str, forced_negative: bool) -> bool {
             let component = component.trim().trim_end_matches(',');
@@ -37898,13 +37940,11 @@ impl Generator {
                 if target_type == "DATE"
                     && matches!(self.config.source_dialect, Some(DialectType::PostgreSQL))
                 {
-                    if let Expression::Literal(literal) = this {
-                        if let Literal::String(value) = literal.as_ref() {
-                            if Self::postgres_year_is_outside_tsql_range(value, format) {
-                                self.unsupported(
-                                    "PostgreSQL TO_DATE literal is outside the T-SQL/Fabric DATE range 0001-01-01 through 9999-12-31",
-                                )?;
-                            }
+                    if let Some(value) = Self::postgres_tsql_literal_string(this) {
+                        if Self::postgres_year_is_outside_tsql_range(&value, format) {
+                            self.unsupported(
+                                "PostgreSQL TO_DATE literal is outside the T-SQL/Fabric DATE range 0001-01-01 through 9999-12-31",
+                            )?;
                         }
                     }
                 }
