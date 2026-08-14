@@ -188,7 +188,7 @@ use crate::parser::Parser;
 use crate::tokens::TokenType;
 use crate::tokens::{Token, Tokenizer, TokenizerConfig};
 #[cfg(feature = "transpile")]
-use crate::traversal::ExpressionWalk;
+use crate::traversal::{is_aggregate, ExpressionWalk};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(feature = "transpile")]
@@ -5374,63 +5374,7 @@ impl Dialect {
     }
 
     fn node_is_aggregate_function(expr: &Expression) -> bool {
-        matches!(
-            expr,
-            Expression::AggregateFunction(_)
-                | Expression::Count(_)
-                | Expression::Sum(_)
-                | Expression::Avg(_)
-                | Expression::Min(_)
-                | Expression::Max(_)
-                | Expression::GroupConcat(_)
-                | Expression::StringAgg(_)
-                | Expression::ListAgg(_)
-                | Expression::ArrayAgg(_)
-                | Expression::CountIf(_)
-                | Expression::SumIf(_)
-                | Expression::Stddev(_)
-                | Expression::StddevPop(_)
-                | Expression::StddevSamp(_)
-                | Expression::Variance(_)
-                | Expression::VarPop(_)
-                | Expression::VarSamp(_)
-                | Expression::Median(_)
-                | Expression::Mode(_)
-                | Expression::First(_)
-                | Expression::Last(_)
-                | Expression::AnyValue(_)
-                | Expression::ApproxDistinct(_)
-                | Expression::ApproxCountDistinct(_)
-                | Expression::ApproxPercentile(_)
-                | Expression::Percentile(_)
-                | Expression::LogicalAnd(_)
-                | Expression::LogicalOr(_)
-                | Expression::Skewness(_)
-                | Expression::BitwiseCount(_)
-                | Expression::BitwiseAndAgg(_)
-                | Expression::BitwiseOrAgg(_)
-                | Expression::BitwiseXorAgg(_)
-                | Expression::ArrayConcatAgg(_)
-                | Expression::ArrayUniqueAgg(_)
-                | Expression::BoolXorAgg(_)
-                | Expression::JsonArrayAgg(_)
-                | Expression::JsonObjectAgg(_)
-                | Expression::ParameterizedAgg(_)
-                | Expression::ArgMax(_)
-                | Expression::ArgMin(_)
-                | Expression::ApproxTopK(_)
-                | Expression::ApproxTopKAccumulate(_)
-                | Expression::ApproxTopKCombine(_)
-                | Expression::ApproxTopKEstimate(_)
-                | Expression::ApproxTopSum(_)
-                | Expression::ApproxQuantiles(_)
-                | Expression::AnonymousAggFunc(_)
-                | Expression::CombinedAggFunc(_)
-                | Expression::CombinedParameterizedAgg(_)
-                | Expression::HashAgg(_)
-                | Expression::ObjectAgg(_)
-                | Expression::AIAgg(_)
-        )
+        is_aggregate(expr)
     }
 
     fn node_has_qualified_whole_row_aggregate_argument(expr: &Expression) -> bool {

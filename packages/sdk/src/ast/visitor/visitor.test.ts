@@ -341,6 +341,22 @@ describe('Convenience Finder Functions', () => {
 
       expect(aggregates.length).toBe(0);
     });
+
+    it('should find DuckDB COUNT_IF, MEDIAN, and FIRST aggregates', () => {
+      const result = parse(
+        'SELECT COUNT_IF(numeric_value > 0), MEDIAN(numeric_value), FIRST(numeric_value) FROM source_table',
+        Dialect.DuckDB,
+      );
+      if (!result.success || !result.ast) {
+        throw new Error(`Parse failed: ${result.error}`);
+      }
+
+      const aggregateTypes = getAggregateFunctions(result.ast[0]).map(
+        getExprType,
+      );
+
+      expect(aggregateTypes).toEqual(['count_if', 'median', 'first']);
+    });
   });
 
   describe('getWindowFunctions()', () => {

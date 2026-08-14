@@ -4631,7 +4631,8 @@ impl Parser {
                 }
 
                 // Check for set operations after the first table expression
-                let had_set_operation = self.check(TokenType::Union)
+                let had_set_operation = self.check_set_operation_modifier_start()
+                    || self.check(TokenType::Union)
                     || self.check(TokenType::Intersect)
                     || self.check(TokenType::Except);
                 let result = if had_set_operation {
@@ -7789,6 +7790,10 @@ impl Parser {
 
     /// Check if the current token starts a JOIN clause
     fn check_join_keyword(&self) -> bool {
+        if self.check_set_operation_modifier_start() {
+            return false;
+        }
+
         self.check(TokenType::Join) ||
         self.check(TokenType::Inner) ||
         self.check(TokenType::Left) ||
@@ -7805,6 +7810,10 @@ impl Parser {
     /// Try to parse a JOIN kind
     /// Returns (JoinKind, needs_join_keyword, use_inner_keyword, use_outer_keyword, join_hint)
     fn try_parse_join_kind(&mut self) -> Option<(JoinKind, bool, bool, bool, Option<String>)> {
+        if self.check_set_operation_modifier_start() {
+            return None;
+        }
+
         if matches!(
             self.config.dialect,
             Some(crate::dialects::DialectType::ClickHouse)
@@ -10246,6 +10255,44 @@ impl Parser {
         true
     }
 
+    /// Whether the current token starts a BigQuery set-operation mode such as
+    /// `FULL OUTER UNION`, `LEFT UNION`, `INNER INTERSECT`, or `OUTER EXCEPT`.
+    /// Keeping this check separate from JOIN parsing prevents the shared
+    /// LEFT/FULL/OUTER tokens from being consumed as an incomplete join.
+    fn check_set_operation_modifier_start(&self) -> bool {
+        if !matches!(
+            self.config.dialect,
+            Some(crate::dialects::DialectType::BigQuery)
+        ) {
+            return false;
+        }
+
+        let mut index = self.current;
+        let Some(first) = self.tokens.get(index).map(|token| token.token_type) else {
+            return false;
+        };
+
+        match first {
+            TokenType::Left | TokenType::Right | TokenType::Full => {
+                index += 1;
+                if self.tokens.get(index).is_some_and(|token| {
+                    matches!(token.token_type, TokenType::Outer | TokenType::Inner)
+                }) {
+                    index += 1;
+                }
+            }
+            TokenType::Inner | TokenType::Outer => index += 1,
+            _ => return false,
+        }
+
+        self.tokens.get(index).is_some_and(|token| {
+            matches!(
+                token.token_type,
+                TokenType::Union | TokenType::Intersect | TokenType::Except
+            )
+        })
+    }
+
     /// Parse set operations (UNION, INTERSECT, EXCEPT)
     fn parse_set_operation(&mut self, left: Expression) -> Result<Expression> {
         let mut result = left;
@@ -10459,9 +10506,11 @@ impl Parser {
         }
     }
 
-    /// Parse BigQuery set operation side (LEFT, RIGHT, FULL) and kind (INNER)
+    /// Parse BigQuery set operation side (LEFT, RIGHT, FULL) and kind
+    /// (INNER, OUTER).
     /// These modifiers appear BEFORE the UNION/INTERSECT/EXCEPT keyword
     fn parse_set_operation_side_kind(&mut self) -> (Option<String>, Option<String>) {
+        let start = self.current;
         let mut side = None;
         let mut kind = None;
 
@@ -10475,38 +10524,31 @@ impl Parser {
             let side_token = self.advance();
             let side_text = side_token.text.to_ascii_uppercase();
 
-            // Check if followed by set operation or INNER
-            if self.check_set_operation_start(TokenType::Union)
+            side = Some(side_text);
+
+            if self.match_token(TokenType::Outer) {
+                kind = Some("OUTER".to_string());
+            } else if self.match_token(TokenType::Inner) {
+                kind = Some("INNER".to_string());
+            }
+
+            if !(self.check_set_operation_start(TokenType::Union)
                 || self.check_set_operation_start(TokenType::Intersect)
-                || self.check_set_operation_start(TokenType::Except)
-                || self.check(TokenType::Inner)
+                || self.check_set_operation_start(TokenType::Except))
             {
-                side = Some(side_text);
-            } else {
-                // Not a set operation modifier, backtrack
                 self.current = saved;
                 return (None, None);
             }
         }
 
-        // Check for kind: INNER
-        if self.check(TokenType::Inner) {
-            let saved = self.current;
-            self.skip(); // consume INNER
-
-            // Check if followed by set operation
-            if self.check_set_operation_start(TokenType::Union)
+        // Check for standalone kind: INNER or OUTER.
+        if side.is_none() && (self.check(TokenType::Inner) || self.check(TokenType::Outer)) {
+            kind = Some(self.advance_text().to_ascii_uppercase());
+            if !(self.check_set_operation_start(TokenType::Union)
                 || self.check_set_operation_start(TokenType::Intersect)
-                || self.check_set_operation_start(TokenType::Except)
+                || self.check_set_operation_start(TokenType::Except))
             {
-                kind = Some("INNER".to_string());
-            } else {
-                // Not a set operation modifier, backtrack
-                self.current = saved;
-                if side.is_some() {
-                    // We already consumed a side token, need to backtrack that too
-                    self.current = saved - 1;
-                }
+                self.current = start;
                 return (None, None);
             }
         }
@@ -10522,7 +10564,7 @@ impl Parser {
         let mut corresponding = false;
         let mut on_columns = Vec::new();
 
-        // Check for BY NAME (DuckDB style)
+        // Check for BY NAME (DuckDB/Snowflake/BigQuery style)
         if self.match_token(TokenType::By) && self.match_identifier("NAME") {
             by_name = true;
         }
@@ -10541,8 +10583,11 @@ impl Parser {
             corresponding = true;
         }
 
-        // If CORRESPONDING is set, check for BY (columns)
-        if corresponding && self.match_token(TokenType::By) {
+        // BigQuery's preferred syntax is BY NAME ON (columns); the standard
+        // CORRESPONDING spelling uses BY (columns).
+        let has_column_list = (by_name && self.match_token(TokenType::On))
+            || (corresponding && self.match_token(TokenType::By));
+        if has_column_list {
             self.expect(TokenType::LParen)?;
             on_columns = self
                 .parse_identifier_list()?
@@ -64800,6 +64845,53 @@ OPTIONS (
     #[test]
     fn test_union_all_by_name() {
         assert_roundtrip("SELECT 1 AS x UNION ALL BY NAME SELECT 2 AS x");
+    }
+
+    #[test]
+    fn test_bigquery_name_aligned_set_operation_modifiers() {
+        for (sql, expected) in [
+            (
+                "SELECT 1 AS a FULL OUTER UNION ALL BY NAME SELECT 2 AS b",
+                "SELECT 1 AS a FULL OUTER UNION ALL BY NAME SELECT 2 AS b",
+            ),
+            (
+                "SELECT 1 AS a LEFT OUTER UNION ALL BY NAME SELECT 2 AS a",
+                "SELECT 1 AS a LEFT OUTER UNION ALL BY NAME SELECT 2 AS a",
+            ),
+            (
+                "SELECT 1 AS a OUTER UNION ALL BY NAME SELECT 2 AS b",
+                "SELECT 1 AS a OUTER UNION ALL BY NAME SELECT 2 AS b",
+            ),
+            (
+                "SELECT 1 AS a INNER UNION ALL BY NAME SELECT 2 AS a",
+                "SELECT 1 AS a INNER UNION ALL BY NAME SELECT 2 AS a",
+            ),
+            (
+                "SELECT 1 AS a FULL OUTER UNION ALL BY NAME ON (b, a) SELECT 2 AS b",
+                "SELECT 1 AS a FULL OUTER UNION ALL BY NAME ON (b, a) SELECT 2 AS b",
+            ),
+            (
+                "SELECT 1 AS a FULL OUTER UNION ALL CORRESPONDING BY (b, a) SELECT 2 AS b",
+                "SELECT 1 AS a FULL OUTER UNION ALL BY NAME ON (b, a) SELECT 2 AS b",
+            ),
+            (
+                "SELECT 1 AS a, 2 AS b INTERSECT DISTINCT BY NAME ON (b, a) SELECT 3 AS b, 4 AS a",
+                "SELECT 1 AS a, 2 AS b INTERSECT DISTINCT BY NAME ON (b, a) SELECT 3 AS b, 4 AS a",
+            ),
+            (
+                "SELECT 1 AS a, 2 AS b EXCEPT DISTINCT BY NAME ON (b, a) SELECT 3 AS b, 4 AS a",
+                "SELECT 1 AS a, 2 AS b EXCEPT DISTINCT BY NAME ON (b, a) SELECT 3 AS b, 4 AS a",
+            ),
+        ] {
+            let parsed = crate::parse(sql, crate::dialects::DialectType::BigQuery)
+                .unwrap_or_else(|error| panic!("failed to parse {sql:?}: {error}"));
+            let generated = crate::generate(
+                parsed.first().expect("one statement"),
+                crate::dialects::DialectType::BigQuery,
+            )
+            .unwrap_or_else(|error| panic!("failed to generate {sql:?}: {error}"));
+            assert_eq!(generated, expected);
+        }
     }
 
     #[test]

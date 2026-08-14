@@ -424,6 +424,7 @@ impl<'a> TypeAnnotator<'a> {
             Expression::Function(func) => self.annotate_function(func),
             Expression::IfFunc(if_func) => self.annotate_if_func(if_func),
             Expression::Nvl2(nvl2) => self.annotate_nvl2(nvl2),
+            Expression::Coalesce(coalesce) => self.coerce_arg_types(&coalesce.expressions),
 
             // Typed aggregate functions
             Expression::Count(_) => Some(DataType::BigInt { length: None }),
@@ -1242,6 +1243,10 @@ impl<'a> TypeAnnotator<'a> {
     fn annotate_function(&mut self, func: &Function) -> Option<DataType> {
         let func_name = func.name.to_uppercase();
 
+        if self._dialect == Some(DialectType::DuckDB) && !func.quoted && func_name == "DATE_TRUNC" {
+            return self.annotate_duckdb_date_trunc(func);
+        }
+
         // Check known function return types
         if let Some(return_type) = self.function_return_types.get(&func_name) {
             if *return_type != DataType::Unknown {
@@ -1284,6 +1289,29 @@ impl<'a> TypeAnnotator<'a> {
                 // Unknown function - try to infer from first argument
                 func.args.first().and_then(|arg| self.annotate(arg))
             }
+        }
+    }
+
+    /// Infer DuckDB's overloaded DATE_TRUNC return type from its temporal value argument.
+    fn annotate_duckdb_date_trunc(&mut self, func: &Function) -> Option<DataType> {
+        if func.args.len() != 2 {
+            return None;
+        }
+
+        match self.annotate(&func.args[1])? {
+            DataType::Date => Some(DataType::Timestamp {
+                precision: None,
+                timezone: false,
+            }),
+            DataType::Timestamp { timezone, .. } => Some(DataType::Timestamp {
+                precision: None,
+                timezone,
+            }),
+            DataType::Interval { .. } => Some(DataType::Interval {
+                unit: None,
+                to: None,
+            }),
+            _ => None,
         }
     }
 
@@ -2134,6 +2162,71 @@ mod tests {
     }
 
     #[test]
+    fn test_duckdb_date_trunc_overload_types() {
+        fn cast_to(data_type: DataType) -> Expression {
+            Expression::Cast(Box::new(Cast {
+                this: make_string_literal("value"),
+                to: data_type,
+                format: None,
+                trailing_comments: Vec::new(),
+                double_colon_syntax: false,
+                default: None,
+                inferred_type: None,
+            }))
+        }
+
+        fn date_trunc(value: Expression) -> Expression {
+            Expression::Function(Box::new(Function::new(
+                "DATE_TRUNC",
+                vec![make_string_literal("month"), value],
+            )))
+        }
+
+        let mut annotator = TypeAnnotator::new(None, Some(DialectType::DuckDB));
+
+        for input_type in [
+            DataType::Date,
+            DataType::Timestamp {
+                precision: Some(9),
+                timezone: false,
+            },
+        ] {
+            assert_eq!(
+                annotator.annotate(&date_trunc(cast_to(input_type))),
+                Some(DataType::Timestamp {
+                    precision: None,
+                    timezone: false,
+                })
+            );
+        }
+
+        assert_eq!(
+            annotator.annotate(&date_trunc(cast_to(DataType::Timestamp {
+                precision: Some(6),
+                timezone: true,
+            }))),
+            Some(DataType::Timestamp {
+                precision: None,
+                timezone: true,
+            })
+        );
+        assert_eq!(
+            annotator.annotate(&date_trunc(cast_to(DataType::Interval {
+                unit: Some("DAY".to_string()),
+                to: Some("SECOND".to_string()),
+            }))),
+            Some(DataType::Interval {
+                unit: None,
+                to: None,
+            })
+        );
+        assert_eq!(
+            annotator.annotate(&date_trunc(Expression::Null(Null))),
+            None
+        );
+    }
+
+    #[test]
     fn test_coalesce_type_inference() {
         let mut annotator = TypeAnnotator::new(None, None);
 
@@ -2144,6 +2237,19 @@ mod tests {
         )));
         assert_eq!(
             annotator.annotate(&coalesce),
+            Some(DataType::Int {
+                length: None,
+                integer_spelling: false
+            })
+        );
+
+        let specialized_coalesce = Expression::Coalesce(Box::new(crate::expressions::VarArgFunc {
+            expressions: vec![Expression::Null(Null), make_int_literal(1)],
+            original_name: None,
+            inferred_type: None,
+        }));
+        assert_eq!(
+            annotator.annotate(&specialized_coalesce),
             Some(DataType::Int {
                 length: None,
                 integer_spelling: false

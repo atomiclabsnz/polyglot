@@ -7183,7 +7183,7 @@ impl Generator {
         }
 
         // BigQuery: CORRESPONDING/STRICT CORRESPONDING -> BY NAME, BY (cols) -> ON (cols)
-        // DuckDB: BY NAME
+        // DuckDB/Snowflake: BY NAME
         if union.corresponding || union.by_name {
             self.write_space();
             self.write_keyword("BY NAME");
@@ -7357,7 +7357,7 @@ impl Generator {
         }
 
         // BigQuery: CORRESPONDING/STRICT CORRESPONDING -> BY NAME, BY (cols) -> ON (cols)
-        // DuckDB: BY NAME
+        // DuckDB/Snowflake: BY NAME
         if intersect.corresponding || intersect.by_name {
             self.write_space();
             self.write_keyword("BY NAME");
@@ -7565,7 +7565,7 @@ impl Generator {
         }
 
         // BigQuery: CORRESPONDING/STRICT CORRESPONDING -> BY NAME, BY (cols) -> ON (cols)
-        // DuckDB: BY NAME
+        // DuckDB/Snowflake: BY NAME
         if except.corresponding || except.by_name {
             self.write_space();
             self.write_keyword("BY NAME");

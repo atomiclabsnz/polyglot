@@ -908,6 +908,32 @@ fn test_output_columns_preserves_unnamed_slots_and_wildcards() {
 }
 
 #[test]
+fn test_bigquery_name_aligned_outputs_cross_ffi_boundary() {
+    let sql = c(
+        "SELECT a, b FROM left_table FULL OUTER UNION ALL BY NAME ON (c, a) SELECT b, c FROM right_table",
+    );
+    let dialect = c("bigquery");
+
+    let (status, data, error) =
+        consume_result(polyglot_output_columns(sql.as_ptr(), dialect.as_ptr()));
+    assert_eq!(status, 0, "error={error:?}");
+    let output: Value =
+        serde_json::from_str(&data.expect("missing output columns")).expect("invalid json");
+    assert_eq!(output["columns"][0]["name"], "c");
+    assert_eq!(output["columns"][1]["name"], "a");
+    assert_eq!(output["ordinalComplete"], true);
+
+    let (status, data, error) =
+        consume_result(polyglot_lineage_at(0, sql.as_ptr(), dialect.as_ptr()));
+    assert_eq!(status, 0, "error={error:?}");
+    let node: Value = serde_json::from_str(&data.expect("missing lineage")).expect("invalid json");
+    let mut names = Vec::new();
+    collect_lineage_names(&node, &mut names);
+    assert!(names.iter().any(|name| name == "right_table.c"));
+    assert!(!names.iter().any(|name| name == "left_table.a"));
+}
+
+#[test]
 fn test_schema_aware_ordinal_and_output_functions_are_exported() {
     let sql = c("SELECT * FROM t");
     let schema = c(

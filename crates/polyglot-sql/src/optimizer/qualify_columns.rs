@@ -345,10 +345,15 @@ fn expand_using(
     _scope: &Scope,
     resolver: &mut Resolver,
 ) -> QualifyColumnsResult<HashMap<String, Vec<String>>> {
-    // columns: column_name → first source that owns it (first-seen-wins)
+    // columns: normalized column name → first source that owns it
+    // (first-seen-wins)
     let mut columns: HashMap<String, String> = HashMap::new();
+    // Preserve the first-seen column order for deterministic NATURAL JOIN
+    // expansion. HashMap iteration order must not affect the generated USING list.
+    let mut column_order: Vec<String> = Vec::new();
 
-    // column_tables: column_name → ordered list of tables that participate in USING
+    // column_tables: normalized column name → ordered list of tables that
+    // participate in USING
     let mut column_tables: HashMap<String, Vec<String>> = HashMap::new();
 
     // Get non-join source names from FROM clause
@@ -364,6 +369,7 @@ fn expand_using(
         .filter(|name| !join_names.contains(name.as_str()))
         .cloned()
         .collect();
+    let mut accumulated_schema_known = true;
 
     if join_names.is_empty() {
         return Ok(column_tables);
@@ -373,40 +379,101 @@ fn expand_using(
     fn update_source_columns(
         source_name: &str,
         columns: &mut HashMap<String, String>,
+        column_order: &mut Vec<String>,
         resolver: &mut Resolver,
-    ) {
-        if let Ok(source_cols) = resolver.get_source_columns(source_name) {
-            for col_name in source_cols {
-                columns
-                    .entry(col_name)
-                    .or_insert_with(|| source_name.to_string());
+    ) -> bool {
+        let Ok(source_cols) = resolver.get_source_columns(source_name) else {
+            return false;
+        };
+        let schema_known = !source_cols.is_empty()
+            && !source_cols
+                .iter()
+                .any(|column| column == "*" || column.is_empty());
+        for col_name in source_cols {
+            let normalized = normalize_column_name(&col_name, resolver.dialect);
+            if let std::collections::hash_map::Entry::Vacant(entry) = columns.entry(normalized) {
+                entry.insert(source_name.to_string());
+                column_order.push(col_name);
             }
         }
+        schema_known
     }
 
     // Pre-populate columns from FROM (base) sources
     for source_name in &ordered {
-        update_source_columns(source_name, &mut columns, resolver);
+        accumulated_schema_known &=
+            update_source_columns(source_name, &mut columns, &mut column_order, resolver);
     }
 
     for i in 0..select.joins.len() {
         // Get source_table (most recently seen non-join table)
         let source_table = ordered.last().cloned().unwrap_or_default();
         if !source_table.is_empty() {
-            update_source_columns(&source_table, &mut columns, resolver);
+            accumulated_schema_known &=
+                update_source_columns(&source_table, &mut columns, &mut column_order, resolver);
         }
 
         // Get join_table name and append to ordered
         let join_table = get_source_name(&select.joins[i].this).unwrap_or_default();
         ordered.push(join_table.clone());
 
-        // Skip if no USING clause
-        if select.joins[i].using.is_empty() {
-            continue;
+        let join_columns: Vec<String> =
+            resolver.get_source_columns(&join_table).unwrap_or_default();
+        let star = normalize_column_name("*", resolver.dialect);
+        let right_schema_known = !join_columns.is_empty()
+            && !join_columns
+                .iter()
+                .any(|column| normalize_column_name(column, resolver.dialect) == star);
+
+        // NATURAL JOIN is an implicit USING join over every column common to
+        // the accumulated left side and the current right side. Only expand
+        // when both schemas are known; otherwise preserve NATURAL rather than
+        // guessing join keys.
+        let join_kind = select.joins[i].kind;
+        if select.joins[i].using.is_empty()
+            && matches!(
+                join_kind,
+                JoinKind::Natural
+                    | JoinKind::NaturalLeft
+                    | JoinKind::NaturalRight
+                    | JoinKind::NaturalFull
+            )
+        {
+            let left_schema_known =
+                accumulated_schema_known && !columns.is_empty() && !columns.contains_key(&star);
+
+            if left_schema_known && right_schema_known {
+                let right_columns: HashSet<String> = join_columns
+                    .iter()
+                    .map(|column| normalize_column_name(column, resolver.dialect))
+                    .collect();
+                let implicit_using: Vec<Identifier> = column_order
+                    .iter()
+                    .filter(|column| {
+                        right_columns.contains(&normalize_column_name(column, resolver.dialect))
+                    })
+                    .map(|column| Identifier::new(column))
+                    .collect();
+
+                if !implicit_using.is_empty() {
+                    select.joins[i].using = implicit_using;
+                    select.joins[i].kind = match join_kind {
+                        JoinKind::Natural => JoinKind::Inner,
+                        JoinKind::NaturalLeft => JoinKind::Left,
+                        JoinKind::NaturalRight => JoinKind::Right,
+                        JoinKind::NaturalFull => JoinKind::Full,
+                        _ => unreachable!("checked NATURAL join kind above"),
+                    };
+                }
+            }
         }
 
-        let _join_columns: Vec<String> =
-            resolver.get_source_columns(&join_table).unwrap_or_default();
+        // Preserve NATURAL joins with unknown schemas or no common columns,
+        // and skip ordinary joins without a USING clause.
+        if select.joins[i].using.is_empty() {
+            accumulated_schema_known &= right_schema_known;
+            continue;
+        }
 
         let using_identifiers: Vec<String> = select.joins[i]
             .using
@@ -428,8 +495,9 @@ fn expand_using(
         let mut conditions: Vec<Expression> = Vec::new();
 
         for identifier in &using_identifiers {
+            let normalized_identifier = normalize_column_name(identifier, resolver.dialect);
             let table = columns
-                .get(identifier)
+                .get(&normalized_identifier)
                 .cloned()
                 .unwrap_or_else(|| source_table.clone());
 
@@ -446,7 +514,11 @@ fn expand_using(
                         resolver
                             .get_source_columns(t)
                             .unwrap_or_default()
-                            .contains(identifier)
+                            .iter()
+                            .any(|column| {
+                                normalize_column_name(column, resolver.dialect)
+                                    == normalized_identifier
+                            })
                     })
                     .cloned()
                     .collect();
@@ -466,7 +538,7 @@ fn expand_using(
             // Track tables for COALESCE rewriting (skip for semi/anti joins)
             if !is_semi_or_anti {
                 let tables = column_tables
-                    .entry(identifier.clone())
+                    .entry(normalized_identifier)
                     .or_insert_with(Vec::new);
                 if !tables.contains(&table) {
                     tables.push(table.clone());
@@ -486,6 +558,7 @@ fn expand_using(
         // Set ON condition and clear USING
         select.joins[i].on = Some(on_condition);
         select.joins[i].using = vec![];
+        accumulated_schema_known &= right_schema_known;
     }
 
     // Phase 2: Rewrite unqualified USING column references to COALESCE
@@ -494,15 +567,17 @@ fn expand_using(
         let mut new_expressions = Vec::with_capacity(select.expressions.len());
         for expr in &select.expressions {
             match expr {
-                Expression::Column(col)
-                    if col.table.is_none() && column_tables.contains_key(&col.name.name) =>
-                {
-                    let tables = &column_tables[&col.name.name];
+                Expression::Column(col) if col.table.is_none() => {
+                    let normalized = normalize_column_name(&col.name.name, resolver.dialect);
+                    let Some(tables) = column_tables.get(&normalized) else {
+                        new_expressions.push(expr.clone());
+                        continue;
+                    };
                     let coalesce = make_coalesce(&col.name.name, tables);
                     // Wrap in alias to preserve column name in projections
                     new_expressions.push(Expression::Alias(Box::new(Alias {
                         this: coalesce,
-                        alias: Identifier::new(&col.name.name),
+                        alias: col.name.clone(),
                         column_aliases: vec![],
                         alias_explicit_as: false,
                         alias_keyword: None,
@@ -513,7 +588,11 @@ fn expand_using(
                 }
                 _ => {
                     let mut rewritten = expr.clone();
-                    rewrite_using_columns_in_expression(&mut rewritten, &column_tables);
+                    rewrite_using_columns_in_expression(
+                        &mut rewritten,
+                        &column_tables,
+                        resolver.dialect,
+                    );
                     new_expressions.push(rewritten);
                 }
             }
@@ -522,30 +601,42 @@ fn expand_using(
 
         // Rewrite WHERE
         if let Some(where_clause) = &mut select.where_clause {
-            rewrite_using_columns_in_expression(&mut where_clause.this, &column_tables);
+            rewrite_using_columns_in_expression(
+                &mut where_clause.this,
+                &column_tables,
+                resolver.dialect,
+            );
         }
 
         // Rewrite GROUP BY
         if let Some(group_by) = &mut select.group_by {
             for expr in &mut group_by.expressions {
-                rewrite_using_columns_in_expression(expr, &column_tables);
+                rewrite_using_columns_in_expression(expr, &column_tables, resolver.dialect);
             }
         }
 
         // Rewrite HAVING
         if let Some(having) = &mut select.having {
-            rewrite_using_columns_in_expression(&mut having.this, &column_tables);
+            rewrite_using_columns_in_expression(&mut having.this, &column_tables, resolver.dialect);
         }
 
         // Rewrite QUALIFY
         if let Some(qualify) = &mut select.qualify {
-            rewrite_using_columns_in_expression(&mut qualify.this, &column_tables);
+            rewrite_using_columns_in_expression(
+                &mut qualify.this,
+                &column_tables,
+                resolver.dialect,
+            );
         }
 
         // Rewrite ORDER BY
         if let Some(order_by) = &mut select.order_by {
             for ordered in &mut order_by.expressions {
-                rewrite_using_columns_in_expression(&mut ordered.this, &column_tables);
+                rewrite_using_columns_in_expression(
+                    &mut ordered.this,
+                    &column_tables,
+                    resolver.dialect,
+                );
             }
         }
     }
@@ -557,13 +648,16 @@ fn expand_using(
 fn rewrite_using_columns_in_expression(
     expr: &mut Expression,
     column_tables: &HashMap<String, Vec<String>>,
+    dialect: Option<DialectType>,
 ) {
     let transformed = transform_recursive(expr.clone(), &|node| match node {
-        Expression::Column(col)
-            if col.table.is_none() && column_tables.contains_key(&col.name.name) =>
-        {
-            let tables = &column_tables[&col.name.name];
-            Ok(make_coalesce(&col.name.name, tables))
+        Expression::Column(col) if col.table.is_none() => {
+            let normalized = normalize_column_name(&col.name.name, dialect);
+            if let Some(tables) = column_tables.get(&normalized) {
+                Ok(make_coalesce(&col.name.name, tables))
+            } else {
+                Ok(Expression::Column(col))
+            }
         }
         other => Ok(other),
     });
@@ -710,12 +804,13 @@ fn expand_stars(
                             return Ok(());
                         }
                         for col_name in &columns {
-                            if coalesced_columns.contains(col_name) {
+                            let normalized = normalize_column_name(col_name, resolver.dialect);
+                            if coalesced_columns.contains(&normalized) {
                                 continue;
                             }
-                            if let Some(tables) = column_tables.get(col_name) {
+                            if let Some(tables) = column_tables.get(&normalized) {
                                 if tables.contains(table_name) {
-                                    coalesced_columns.insert(col_name.clone());
+                                    coalesced_columns.insert(normalized);
                                     let coalesce = make_coalesce(col_name, tables);
                                     new_selections.push(Expression::Alias(Box::new(Alias {
                                         this: coalesce,
@@ -741,14 +836,15 @@ fn expand_stars(
                                 return Ok(());
                             }
                             for col_name in &columns {
-                                if coalesced_columns.contains(col_name) {
+                                let normalized = normalize_column_name(col_name, resolver.dialect);
+                                if coalesced_columns.contains(&normalized) {
                                     // Already emitted as COALESCE, skip
                                     continue;
                                 }
-                                if let Some(tables) = column_tables.get(col_name) {
+                                if let Some(tables) = column_tables.get(&normalized) {
                                     if tables.contains(source_name) {
                                         // Emit COALESCE and mark as coalesced
-                                        coalesced_columns.insert(col_name.clone());
+                                        coalesced_columns.insert(normalized);
                                         let coalesce = make_coalesce(col_name, tables);
                                         new_selections.push(Expression::Alias(Box::new(Alias {
                                             this: coalesce,
@@ -782,12 +878,13 @@ fn expand_stars(
                             return Ok(());
                         }
                         for col_name in &columns {
-                            if coalesced_columns.contains(col_name) {
+                            let normalized = normalize_column_name(col_name, resolver.dialect);
+                            if coalesced_columns.contains(&normalized) {
                                 continue;
                             }
-                            if let Some(tables) = column_tables.get(col_name) {
+                            if let Some(tables) = column_tables.get(&normalized) {
                                 if tables.contains(table_name) {
-                                    coalesced_columns.insert(col_name.clone());
+                                    coalesced_columns.insert(normalized);
                                     let coalesce = make_coalesce(col_name, tables);
                                     new_selections.push(Expression::Alias(Box::new(Alias {
                                         this: coalesce,
@@ -3222,6 +3319,214 @@ mod tests {
             "USING column from x.* should become COALESCE: {sql}"
         );
         assert!(sql.contains("x.a"), "non-USING column a: {sql}");
+    }
+
+    #[test]
+    fn test_expand_natural_join_with_derived_table() {
+        let expr = parse(
+            "SELECT shared_key AS output_key FROM source_table \
+             NATURAL JOIN (SELECT shared_key FROM source_table) AS derived",
+        );
+
+        let mut schema = MappingSchema::new();
+        schema
+            .add_table(
+                "source_table",
+                &[(
+                    "shared_key".to_string(),
+                    DataType::VarChar {
+                        length: None,
+                        parenthesized_length: false,
+                    },
+                )],
+                None,
+            )
+            .expect("schema setup");
+
+        let result = qualify_columns(
+            expr,
+            &schema,
+            &QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB),
+        )
+        .expect("qualify");
+        let sql = gen(&result);
+
+        assert!(!sql.contains("NATURAL"), "NATURAL should expand: {sql}");
+        assert!(
+            sql.contains("ON source_table.shared_key = derived.shared_key"),
+            "common column should become an equality condition: {sql}"
+        );
+        assert!(
+            sql.contains("COALESCE(source_table.shared_key, derived.shared_key) AS output_key"),
+            "merged projection should preserve both sources: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_expand_natural_join_star_and_chained_sources() {
+        let expr = parse("SELECT * FROM x NATURAL JOIN y NATURAL JOIN z");
+
+        let mut schema = MappingSchema::new();
+        schema
+            .add_table(
+                "x",
+                &[
+                    ("a".to_string(), DataType::BigInt { length: None }),
+                    ("shared".to_string(), DataType::BigInt { length: None }),
+                ],
+                None,
+            )
+            .expect("schema setup");
+        schema
+            .add_table(
+                "y",
+                &[
+                    ("shared".to_string(), DataType::BigInt { length: None }),
+                    ("b".to_string(), DataType::BigInt { length: None }),
+                ],
+                None,
+            )
+            .expect("schema setup");
+        schema
+            .add_table(
+                "z",
+                &[
+                    ("shared".to_string(), DataType::BigInt { length: None }),
+                    ("c".to_string(), DataType::BigInt { length: None }),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let result =
+            qualify_columns(expr, &schema, &QualifyColumnsOptions::new()).expect("qualify");
+        let sql = gen(&result);
+
+        assert!(!sql.contains("NATURAL"), "both joins should expand: {sql}");
+        assert!(sql.contains("ON x.shared = y.shared"), "first join: {sql}");
+        assert!(sql.contains("ON x.shared = z.shared"), "second join: {sql}");
+        assert_eq!(
+            sql.matches("COALESCE(x.shared, y.shared, z.shared) AS shared")
+                .count(),
+            1,
+            "merged star column should be emitted once: {sql}"
+        );
+        assert!(sql.contains("x.a"), "left-only column should remain: {sql}");
+        assert!(
+            sql.contains("y.b"),
+            "middle-only column should remain: {sql}"
+        );
+        assert!(
+            sql.contains("z.c"),
+            "right-only column should remain: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_expand_natural_outer_join_kinds() {
+        let mut schema = MappingSchema::new();
+        for table in ["x", "y"] {
+            schema
+                .add_table(
+                    table,
+                    &[("shared".to_string(), DataType::BigInt { length: None })],
+                    None,
+                )
+                .expect("schema setup");
+        }
+
+        for (input_kind, output_kind) in [
+            ("NATURAL LEFT JOIN", "LEFT JOIN"),
+            ("NATURAL RIGHT JOIN", "RIGHT JOIN"),
+            ("NATURAL FULL JOIN", "FULL JOIN"),
+        ] {
+            let expr = parse(&format!("SELECT shared FROM x {input_kind} y"));
+            let result =
+                qualify_columns(expr, &schema, &QualifyColumnsOptions::new()).expect("qualify");
+            let sql = gen(&result);
+
+            assert!(
+                !sql.contains("NATURAL"),
+                "{input_kind} should expand: {sql}"
+            );
+            assert!(sql.contains(output_kind), "join kind should remain: {sql}");
+            assert!(
+                sql.contains("ON x.shared = y.shared"),
+                "join condition should be derived: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_preserve_natural_join_without_known_common_columns() {
+        let mut no_common_schema = MappingSchema::new();
+        no_common_schema
+            .add_table(
+                "x",
+                &[("a".to_string(), DataType::BigInt { length: None })],
+                None,
+            )
+            .expect("schema setup");
+        no_common_schema
+            .add_table(
+                "y",
+                &[("b".to_string(), DataType::BigInt { length: None })],
+                None,
+            )
+            .expect("schema setup");
+
+        let no_common = qualify_columns(
+            parse("SELECT * FROM x NATURAL JOIN y"),
+            &no_common_schema,
+            &QualifyColumnsOptions::new(),
+        )
+        .expect("qualify");
+        assert!(
+            gen(&no_common).contains("NATURAL JOIN"),
+            "join without common columns should remain NATURAL"
+        );
+
+        let mut partial_schema = MappingSchema::new();
+        partial_schema
+            .add_table(
+                "x",
+                &[("a".to_string(), DataType::BigInt { length: None })],
+                None,
+            )
+            .expect("schema setup");
+        let unknown_right = qualify_columns(
+            parse("SELECT * FROM x NATURAL JOIN unknown_table"),
+            &partial_schema,
+            &QualifyColumnsOptions::new().with_allow_partial(true),
+        )
+        .expect("partial qualification");
+        assert!(
+            gen(&unknown_right).contains("NATURAL JOIN"),
+            "join with an unknown schema should remain NATURAL"
+        );
+
+        let unknown_left = qualify_columns(
+            parse("SELECT * FROM unknown_table NATURAL JOIN x"),
+            &partial_schema,
+            &QualifyColumnsOptions::new().with_allow_partial(true),
+        )
+        .expect("partial qualification");
+        assert!(
+            gen(&unknown_left).contains("NATURAL JOIN"),
+            "join with an unknown left schema should remain NATURAL"
+        );
+
+        let partially_known_chain = qualify_columns(
+            parse("SELECT * FROM x NATURAL JOIN unknown_table NATURAL JOIN x AS x2"),
+            &partial_schema,
+            &QualifyColumnsOptions::new().with_allow_partial(true),
+        )
+        .expect("partial qualification");
+        assert_eq!(
+            gen(&partially_known_chain).matches("NATURAL JOIN").count(),
+            2,
+            "an unknown earlier source should prevent later inferred join keys"
+        );
     }
 
     #[test]

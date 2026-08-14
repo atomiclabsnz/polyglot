@@ -3791,7 +3791,7 @@ impl Default for Select {
 ///
 /// When `all` is true, duplicate rows are preserved (UNION ALL).
 /// ORDER BY, LIMIT, and OFFSET can be applied to the combined result.
-/// Supports DuckDB's BY NAME modifier and BigQuery's CORRESPONDING modifier.
+/// Supports DuckDB/Snowflake BY NAME and BigQuery BY NAME/CORRESPONDING modifiers.
 #[derive(polyglot_sql_ast_derive::AstNode, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(TS))]
 pub struct Union {
@@ -3821,7 +3821,7 @@ pub struct Union {
     /// CLUSTER BY clause (Hive/Spark)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster_by: Option<ClusterBy>,
-    /// DuckDB BY NAME modifier
+    /// DuckDB, Snowflake, and BigQuery BY NAME modifier
     #[serde(default)]
     pub by_name: bool,
     /// BigQuery: Set operation side (LEFT, RIGHT, FULL)
@@ -3890,7 +3890,7 @@ pub struct Intersect {
     /// CLUSTER BY clause (Hive/Spark)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster_by: Option<ClusterBy>,
-    /// DuckDB BY NAME modifier
+    /// DuckDB, Snowflake, and BigQuery BY NAME modifier
     #[serde(default)]
     pub by_name: bool,
     /// BigQuery: Set operation side (LEFT, RIGHT, FULL)
@@ -3957,7 +3957,7 @@ pub struct Except {
     /// CLUSTER BY clause (Hive/Spark)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster_by: Option<ClusterBy>,
-    /// DuckDB BY NAME modifier
+    /// DuckDB, Snowflake, and BigQuery BY NAME modifier
     #[serde(default)]
     pub by_name: bool,
     /// BigQuery: Set operation side (LEFT, RIGHT, FULL)

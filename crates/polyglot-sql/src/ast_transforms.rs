@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::builder::engine;
 use crate::expressions::*;
-use crate::traversal::ExpressionWalk;
+use crate::traversal::{is_aggregate, ExpressionWalk};
 
 /// Apply a bottom-up transformation to every node in the tree.
 /// Wraps `crate::traversal::transform` with a simpler signature for this module.
@@ -336,6 +336,26 @@ pub fn get_output_column_names(expr: &Expression) -> Vec<String> {
     output_column_names_from_query(expr)
 }
 
+/// Collect projected output column names using dialect-specific set-operation
+/// alignment rules.
+///
+/// This differs from [`get_output_column_names`] only for name-aligned set
+/// operations. When an output shape is not statically knowable (for example an
+/// unresolved wildcard), it preserves the existing leftmost-branch behavior.
+pub fn get_output_column_names_for_dialect(
+    expr: &Expression,
+    dialect: Option<crate::dialects::DialectType>,
+) -> Vec<String> {
+    crate::set_operation::query_output_identifiers(expr, dialect)
+        .map(|identifiers| {
+            identifiers
+                .into_iter()
+                .map(|identifier| identifier.name)
+                .collect()
+        })
+        .unwrap_or_else(|_| output_column_names_from_query(expr))
+}
+
 fn output_column_names_from_query(expr: &Expression) -> Vec<String> {
     match expr {
         Expression::Select(select) => select_output_column_names(select),
@@ -540,22 +560,7 @@ pub fn get_subqueries(expr: &Expression) -> Vec<&Expression> {
 /// Includes typed aggregates (`Count`, `Sum`, `Avg`, `Min`, `Max`, etc.)
 /// and generic `AggregateFunction` nodes.
 pub fn get_aggregate_functions(expr: &Expression) -> Vec<&Expression> {
-    expr.find_all(|e| {
-        matches!(
-            e,
-            Expression::AggregateFunction(_)
-                | Expression::Count(_)
-                | Expression::Sum(_)
-                | Expression::Avg(_)
-                | Expression::Min(_)
-                | Expression::Max(_)
-                | Expression::ApproxDistinct(_)
-                | Expression::ArrayAgg(_)
-                | Expression::GroupConcat(_)
-                | Expression::StringAgg(_)
-                | Expression::ListAgg(_)
-        )
-    })
+    expr.find_all(is_aggregate)
 }
 
 /// Collect all window function nodes in the expression tree.
@@ -693,6 +698,37 @@ mod tests {
         let expr = parse_one("SELECT id AS c1, name AS c2 FROM t1 UNION SELECT x, y FROM t2");
         let names = get_output_column_names(&expr);
         assert_eq!(names, vec!["c1".to_string(), "c2".to_string()]);
+    }
+
+    #[test]
+    fn test_get_output_column_names_uses_dialect_by_name_layout() {
+        for dialect in [
+            crate::dialects::DialectType::DuckDB,
+            crate::dialects::DialectType::Snowflake,
+        ] {
+            let expr = crate::parse_one(
+                "SELECT 1 AS left_value UNION ALL BY NAME SELECT 2 AS right_value",
+                dialect,
+            )
+            .expect("parse");
+            assert_eq!(
+                get_output_column_names_for_dialect(&expr, Some(dialect)),
+                vec!["left_value", "right_value"]
+            );
+        }
+
+        let expr = crate::parse_one(
+            "SELECT 1 AS a, 2 AS b UNION ALL BY NAME SELECT 3 AS b, 4 AS a",
+            crate::dialects::DialectType::BigQuery,
+        )
+        .expect("parse");
+        assert_eq!(
+            get_output_column_names_for_dialect(
+                &expr,
+                Some(crate::dialects::DialectType::BigQuery),
+            ),
+            vec!["a", "b"]
+        );
     }
 
     #[test]
@@ -851,12 +887,14 @@ mod tests {
 
     #[test]
     fn test_get_aggregate_functions() {
-        let expr = parse_one("SELECT COUNT(*), SUM(x) FROM t");
+        let expr = crate::parse_one(
+            "SELECT COUNT_IF(numeric_value > 0), MEDIAN(numeric_value), FIRST(numeric_value) FROM source_table",
+            crate::dialects::DialectType::DuckDB,
+        )
+        .unwrap();
         let aggs = get_aggregate_functions(&expr);
-        assert!(
-            aggs.len() >= 2,
-            "Expected at least 2 aggregates, got {}",
-            aggs.len()
-        );
+        let aggregate_types: Vec<_> = aggs.iter().map(|agg| agg.variant_name()).collect();
+
+        assert_eq!(aggregate_types, vec!["count_if", "median", "first"]);
     }
 }

@@ -4,6 +4,40 @@ All notable changes to this project are documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [0.9.1] - 2026-08-14
+
+### Added
+- Rust AST consumers can use `get_output_column_names_for_dialect` to discover
+  result columns with dialect-specific name-aligned set-operation semantics,
+  while retaining the existing leftmost-branch fallback for indeterminate
+  output shapes.
+
+### Fixed
+- Schema-aware analysis and lineage now resolve unqualified columns merged by
+  `NATURAL JOIN`, including derived, chained, and outer joins, to their physical
+  inputs and preserve their schema-derived types. Joins whose common columns
+  cannot be established remain unexpanded.
+- Anonymous derived tables now receive collision-free internal aliases during
+  schema-aware qualification, so their projections retain physical upstream
+  lineage and type hints without renaming physical tables or restructuring set
+  operations.
+- DuckDB and Snowflake `UNION [ALL] BY NAME` output discovery, ordinal lineage,
+  resolution, nullability, and compact query analysis now align branches by
+  column name instead of position. BigQuery name-aligned set operations now
+  support `STRICT`, `INNER`, `LEFT`, `FULL [OUTER]`, explicit `ON` ordering, and
+  `CORRESPONDING BY` normalization with dialect-aware identifier matching. The
+  corrected behavior is reflected across Rust, Python, C FFI, Go, WASM, and
+  TypeScript APIs.
+- DuckDB `DATE_TRUNC` now infers its result from the temporal input overload:
+  dates and timestamps produce timestamps with the appropriate timezone
+  semantics, while intervals remain intervals. Specialized `COALESCE` nodes
+  also infer their common argument type consistently.
+- Aggregate discovery now uses one shared classifier across AST helpers,
+  compact query analysis, semantic validation, dialect checks, OpenLineage, and
+  planning. DuckDB `COUNT_IF`, `MEDIAN`, and `FIRST`, along with the other typed
+  aggregate variants, are recognized consistently while scalar lookalikes and
+  window-only functions remain excluded.
+
 ## [0.9.0] - 2026-08-11
 
 ### Added
