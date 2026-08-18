@@ -2294,6 +2294,11 @@ pub(super) fn normalize(
                         {
                             Action::Aggregates(aggregates::Action::BigQueryPercentileContToDuckDB)
                         }
+                        "QUANTILE" | "QUANTILE_CONT" | "QUANTILE_DISC" | "APPROX_QUANTILE"
+                            if matches!(source, DialectType::DuckDB) =>
+                        {
+                            Action::Aggregates(aggregates::Action::DuckDBQuantileConvert)
+                        }
                         _ => Action::None,
                     }
                 }

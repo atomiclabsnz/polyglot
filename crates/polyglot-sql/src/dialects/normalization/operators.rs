@@ -1418,25 +1418,22 @@ pub(super) fn rewrite(
                         ],
                     )));
 
-                    // Position offset: pos - 1 when pos > 1, else 0
-                    let pos_offset: Expression = if !is_pos_1 {
-                        let pos = position.clone().unwrap_or(Expression::number(1));
-                        Expression::Sub(Box::new(BinaryOp::new(pos, Expression::number(1))))
-                    } else {
-                        Expression::number(0)
-                    };
-
-                    // ELSE: 1 + split_sum + extract_sum + pos_offset
-                    let else_expr = Expression::Add(Box::new(BinaryOp::new(
-                        Expression::Add(Box::new(BinaryOp::new(
-                            Expression::Add(Box::new(BinaryOp::new(
-                                Expression::number(1),
-                                split_sum,
-                            ))),
-                            extract_sum,
-                        ))),
-                        pos_offset,
+                    // ELSE base: 1 + split_sum + extract_sum
+                    let else_base = Expression::Add(Box::new(BinaryOp::new(
+                        Expression::Add(Box::new(BinaryOp::new(Expression::number(1), split_sum))),
+                        extract_sum,
                     )));
+
+                    // Append the position offset as a left-associated `+ pos - 1` chain.
+                    let else_expr = if !is_pos_1 {
+                        let pos = position.clone().unwrap_or(Expression::number(1));
+                        Expression::Sub(Box::new(BinaryOp::new(
+                            Expression::Add(Box::new(BinaryOp::new(else_base, pos))),
+                            Expression::number(1),
+                        )))
+                    } else {
+                        Expression::Add(Box::new(BinaryOp::new(else_base, Expression::number(0))))
+                    };
 
                     Ok(Expression::Case(Box::new(Case {
                         operand: None,

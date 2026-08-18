@@ -209,6 +209,14 @@ describe('Expr operators', () => {
     it('xor', () => {
       expect(col('a').xor(col('b')).toSql()).toBe('a XOR b');
     });
+    it('preserves nested precedence', () => {
+      const a = col('a').eq(lit(1));
+      const b = col('b').eq(lit(2));
+      const c = col('c').eq(lit(3));
+
+      expect(and(or(a, b), c).toSql()).toBe('(a = 1 OR b = 2) AND c = 3');
+      expect(a.and(b.or(c)).toSql()).toBe('a = 1 AND (b = 2 OR c = 3)');
+    });
   });
 
   describe('arithmetic', () => {
@@ -223,6 +231,24 @@ describe('Expr operators', () => {
     });
     it('div', () => {
       expect(col('a').div(col('b')).toSql()).toBe('a / b');
+    });
+    it('preserves nested precedence and associativity', () => {
+      expect(col('a').add(col('b')).mul(col('c')).toSql()).toBe('(a + b) * c');
+      expect(
+        col('a')
+          .mul(col('b').add(col('c')))
+          .toSql(),
+      ).toBe('a * (b + c)');
+      expect(
+        col('a')
+          .sub(col('b').sub(col('c')))
+          .toSql(),
+      ).toBe('a - (b - c)');
+      expect(
+        col('a')
+          .div(col('b').div(col('c')))
+          .toSql(),
+      ).toBe('a / (b / c)');
     });
   });
 
@@ -764,6 +790,38 @@ describe('End-to-end queries', () => {
 });
 
 describe('SQLGlot-compatible immutable builders', () => {
+  it('preserves nested operator grouping in serialized plans', () => {
+    const a = compat.column('a').eq(1);
+    const b = compat.column('b').eq(2);
+    const c = compat.column('c').eq(3);
+
+    expect(compat.and_(compat.or_(a, b), c).sql()).toBe(
+      '(a = 1 OR b = 2) AND c = 3',
+    );
+    expect(a.and_(b.or_(c)).sql()).toBe('a = 1 AND (b = 2 OR c = 3)');
+    expect(
+      compat.col('a').add(compat.col('b')).mul(compat.col('c')).sql(),
+    ).toBe('(a + b) * c');
+    expect(
+      compat
+        .col('a')
+        .mul(compat.col('b').add(compat.col('c')))
+        .sql(),
+    ).toBe('a * (b + c)');
+    expect(
+      compat
+        .col('a')
+        .sub(compat.col('b').sub(compat.col('c')))
+        .sql(),
+    ).toBe('a - (b - c)');
+    expect(
+      compat
+        .col('a')
+        .div(compat.col('b').div(compat.col('c')))
+        .sql(),
+    ).toBe('a / (b / c)');
+  });
+
   it('parses clause strings and preserves scalar string coercion', () => {
     const query = compat
       .select('customer_id', 'COUNT(*) AS orders')

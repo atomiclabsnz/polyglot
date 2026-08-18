@@ -4098,6 +4098,36 @@ mod aggregate_functions {
     }
 
     #[test]
+    fn duckdb_quantile_aggregates_preserve_existing_target_lowerings() {
+        let cases = [
+            (
+                "SELECT QUANTILE(a, 0.5) FROM t",
+                DialectType::Spark,
+                "SELECT PERCENTILE(a, 0.5) FROM t",
+            ),
+            (
+                "SELECT QUANTILE_CONT(a, 0.5) FROM t",
+                DialectType::PostgreSQL,
+                "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY a) FROM t",
+            ),
+            (
+                "SELECT QUANTILE_DISC(a, 0.5) FROM t",
+                DialectType::PostgreSQL,
+                "SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY a) FROM t",
+            ),
+            (
+                "SELECT APPROX_QUANTILE(a, 0.5) FROM t",
+                DialectType::Snowflake,
+                "SELECT APPROX_PERCENTILE(a, 0.5) FROM t",
+            ),
+        ];
+
+        for (sql, target, expected) in cases {
+            assert_eq!(transpile(sql, DialectType::DuckDB, target), expected);
+        }
+    }
+
+    #[test]
     fn test_sum_avg_min_max() {
         let functions = ["SUM", "AVG", "MIN", "MAX"];
         let dialects = [

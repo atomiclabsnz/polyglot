@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [0.9.2] - 2026-08-18
+
+### Fixed
+- DuckDB schema-aware validation, analysis, output discovery, and lineage now
+  distinguish struct field access from table qualification. Direct struct
+  columns and struct values emitted by `UNNEST` resolve their scalar field type
+  and retain lineage to the physical source column, while genuinely unknown
+  qualifiers remain errors.
+- DuckDB aggregate parsing and discovery now cover the documented 1.4 LTS
+  expression-level aggregate catalog and aliases consistently, including
+  unordered `LIST`, `ARG_MAX_NULL`/`ARG_MIN_NULL`, `PRODUCT`,
+  `HISTOGRAM_EXACT`, and the quantile and statistical aggregates. Compact query
+  analysis classifies these calls as aggregations, aggregate-local modifiers
+  remain intact, and existing quantile transpilation behavior is preserved.
+- TypeScript AST walking, transformation, cloning, and removal now recurse into
+  expressions nested inside serialized AST structs, including aggregate and
+  query `ORDER BY` entries, joins, CTE bodies, and window definitions. Walker
+  and transformer callbacks now cover the same nodes with stable parent, key,
+  and index metadata.
+- SQL generation now adds the parentheses required to preserve programmatically
+  constructed boolean and arithmetic expression trees. Native and serialized
+  builders retain nested operator precedence and the right-hand grouping of
+  non-associative operators such as subtraction and division.
+
 ## [0.9.1] - 2026-08-14
 
 ### Added

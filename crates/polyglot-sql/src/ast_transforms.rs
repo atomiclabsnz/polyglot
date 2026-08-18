@@ -897,4 +897,25 @@ mod tests {
 
         assert_eq!(aggregate_types, vec!["count_if", "median", "first"]);
     }
+
+    #[test]
+    fn test_get_duckdb_null_preserving_arg_extrema() {
+        let expr = crate::parse_one(
+            "SELECT ARG_MAX_NULL(label, score), ARG_MIN_NULL(label, score) FROM source_table",
+            crate::dialects::DialectType::DuckDB,
+        )
+        .unwrap();
+        let aggregates = get_aggregate_functions(&expr);
+
+        assert_eq!(aggregates.len(), 2);
+        for (aggregate, expected_name) in
+            aggregates.into_iter().zip(["ARG_MAX_NULL", "ARG_MIN_NULL"])
+        {
+            let Expression::AggregateFunction(function) = aggregate else {
+                panic!("expected a generic aggregate node, got {aggregate:?}");
+            };
+            assert_eq!(function.name, expected_name);
+            assert_eq!(function.args.len(), 2);
+        }
+    }
 }

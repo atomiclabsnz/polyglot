@@ -32240,6 +32240,7 @@ impl Parser {
                         inferred_type: None,
                     }),
                     field: Identifier::new(field_name),
+                    inferred_type: None,
                 }));
                 return self.maybe_parse_subscript(col_expr);
             }
@@ -32263,6 +32264,7 @@ impl Parser {
                         inferred_type: None,
                     }),
                     field: Identifier::new(field_name),
+                    inferred_type: None,
                 }));
                 return self.maybe_parse_subscript(col_expr);
             }
@@ -32289,6 +32291,7 @@ impl Parser {
                         inferred_type: None,
                     }),
                     field: Identifier::new(field_name),
+                    inferred_type: None,
                 }));
                 return self.maybe_parse_subscript(col_expr);
             }
@@ -34243,6 +34246,7 @@ impl Parser {
                             inferred_type: None,
                         }),
                         field: Identifier::new(field_name),
+                        inferred_type: None,
                     }));
                     return self.maybe_parse_subscript(col);
                 }
@@ -34260,6 +34264,7 @@ impl Parser {
                             inferred_type: None,
                         }),
                         field: Identifier::new(field_name),
+                        inferred_type: None,
                     }));
                     return self.maybe_parse_subscript(col_expr);
                 }
@@ -34672,8 +34677,8 @@ impl Parser {
     }
 
     /// Check if function name is a known aggregate function
-    fn is_aggregate_function(name: &str) -> bool {
-        crate::function_registry::is_aggregate_function_name(name)
+    fn is_aggregate_function(&self, name: &str) -> bool {
+        crate::function_registry::is_aggregate_function_name_for_dialect(name, self.config.dialect)
     }
 
     fn parse_clickhouse_overlay_family_function(
@@ -37155,7 +37160,14 @@ impl Parser {
                 self.expect(TokenType::RParen)?;
                 let filter = self.parse_filter_clause()?;
 
-                if distinct || !order_by.is_empty() || limit.is_some() || filter.is_some() {
+                if matches!(
+                    self.config.dialect,
+                    Some(crate::dialects::DialectType::DuckDB)
+                ) || distinct
+                    || !order_by.is_empty()
+                    || limit.is_some()
+                    || filter.is_some()
+                {
                     Ok(Expression::AggregateFunction(Box::new(AggregateFunction {
                         name: name.to_string(),
                         args,
@@ -37454,18 +37466,45 @@ impl Parser {
                     while self.match_token(TokenType::Comma) {
                         args.push(self.parse_expression()?);
                     }
+                    let is_duckdb_top_n = matches!(
+                        self.config.dialect,
+                        Some(crate::dialects::DialectType::DuckDB)
+                    ) && matches!(canonical_upper_name, "MIN" | "MAX")
+                        && args.len() == 2;
+                    let order_by = if is_duckdb_top_n
+                        && self.match_keywords(&[TokenType::Order, TokenType::By])
+                    {
+                        self.parse_order_by_list()?
+                    } else {
+                        Vec::new()
+                    };
                     self.expect(TokenType::RParen)?;
-                    Ok(Expression::Function(Box::new(Function {
-                        name: name.to_string(),
-                        args,
-                        distinct: false,
-                        trailing_comments: Vec::new(),
-                        use_bracket_syntax: false,
-                        no_parens: false,
-                        quoted: false,
-                        span: None,
-                        inferred_type: None,
-                    })))
+
+                    if is_duckdb_top_n {
+                        let filter = self.parse_filter_clause()?;
+                        Ok(Expression::AggregateFunction(Box::new(AggregateFunction {
+                            name: name.to_string(),
+                            args,
+                            distinct,
+                            filter,
+                            order_by,
+                            limit: None,
+                            ignore_nulls: None,
+                            inferred_type: None,
+                        })))
+                    } else {
+                        Ok(Expression::Function(Box::new(Function {
+                            name: name.to_string(),
+                            args,
+                            distinct: false,
+                            trailing_comments: Vec::new(),
+                            use_bracket_syntax: false,
+                            no_parens: false,
+                            quoted: false,
+                            span: None,
+                            inferred_type: None,
+                        })))
+                    }
                 } else {
                     // Check for IGNORE NULLS / RESPECT NULLS (BigQuery style)
                     let ignore_nulls = if self.match_token(TokenType::Ignore)
@@ -38732,7 +38771,7 @@ impl Parser {
 
     /// Parse a generic function call (fallback for unrecognized functions)
     fn parse_generic_function(&mut self, name: &str, quoted: bool) -> Result<Expression> {
-        let is_known_agg = Self::is_aggregate_function(name);
+        let is_known_agg = self.is_aggregate_function(name);
 
         let (mut args, distinct) = if self.check(TokenType::RParen) {
             (Vec::new(), false)
@@ -40008,6 +40047,7 @@ impl Parser {
                         expr = Expression::Dot(Box::new(DotAccess {
                             this: expr,
                             field: Identifier::new("*"),
+                            inferred_type: None,
                         }));
                     }
                 } else if self.check(TokenType::Identifier)
@@ -40041,6 +40081,7 @@ impl Parser {
                         expr = Expression::Dot(Box::new(DotAccess {
                             this: expr,
                             field: ident,
+                            inferred_type: None,
                         }));
                     }
                 } else if self.check(TokenType::Number) {
@@ -40049,6 +40090,7 @@ impl Parser {
                     expr = Expression::Dot(Box::new(DotAccess {
                         this: expr,
                         field: Identifier::new(field_name),
+                        inferred_type: None,
                     }));
                 } else if matches!(
                     self.config.dialect,
@@ -40068,6 +40110,7 @@ impl Parser {
                     expr = Expression::Dot(Box::new(DotAccess {
                         this: expr,
                         field: Identifier::new(field_name),
+                        inferred_type: None,
                     }));
                 } else if matches!(
                     self.config.dialect,
@@ -40087,6 +40130,7 @@ impl Parser {
                     expr = Expression::Dot(Box::new(DotAccess {
                         this: expr,
                         field: Identifier::new(type_name),
+                        inferred_type: None,
                     }));
                 } else if matches!(
                     self.config.dialect,
@@ -40102,6 +40146,7 @@ impl Parser {
                     expr = Expression::Dot(Box::new(DotAccess {
                         this: expr,
                         field: Identifier::new(format!("-{}", num)),
+                        inferred_type: None,
                     }));
                 } else {
                     return Err(self.parse_error("Expected field name after dot"));
@@ -49499,6 +49544,7 @@ impl Parser {
                 result = Some(Expression::Dot(Box::new(DotAccess {
                     this: result.take().unwrap(),
                     field: field_ident,
+                    inferred_type: None,
                 })));
             } else {
                 break;
@@ -55002,6 +55048,7 @@ impl Parser {
                 expr = Expression::Dot(Box::new(DotAccess {
                     this: expr,
                     field: part,
+                    inferred_type: None,
                 }));
             }
             expr

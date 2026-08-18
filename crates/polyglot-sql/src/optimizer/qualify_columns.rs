@@ -8,8 +8,8 @@
 use crate::dialects::transform_recursive;
 use crate::dialects::DialectType;
 use crate::expressions::{
-    Alias, BinaryOp, Column, Expression, Identifier, Join, JoinKind, LateralView, Literal, Over,
-    Paren, Select, TableRef, VarArgFunc, With,
+    Alias, BinaryOp, Column, DotAccess, Expression, Identifier, Join, JoinKind, LateralView,
+    Literal, Over, Paren, Select, TableRef, VarArgFunc, With,
 };
 use crate::resolver::{Resolver, ResolverError};
 use crate::schema::{normalize_name, Schema};
@@ -157,7 +157,18 @@ pub fn qualify_columns(
                     }
                 }
 
-                // 3. Qualify columns (add table qualifiers)
+                // 3. A parsed `column.field` is indistinguishable from `table.column`.
+                // Normalize an apparent qualifier that resolves as a column before
+                // regular qualification rejects it as an unknown table.
+                if first_error.borrow().is_none() {
+                    if let Err(err) =
+                        normalize_dotted_columns_in_scope(&mut select, &scope, &mut resolver)
+                    {
+                        *first_error.borrow_mut() = Some(err);
+                    }
+                }
+
+                // 4. Qualify columns (add table qualifiers)
                 if first_error.borrow().is_none() {
                     if let Err(err) = qualify_columns_in_scope(
                         &mut select,
@@ -169,7 +180,7 @@ pub fn qualify_columns(
                     }
                 }
 
-                // 4. Expand star expressions (with USING deduplication)
+                // 5. Expand star expressions (with USING deduplication)
                 if first_error.borrow().is_none() && options.expand_stars {
                     if let Err(err) =
                         expand_stars(&mut select, &scope, &mut resolver, &column_tables)
@@ -178,14 +189,14 @@ pub fn qualify_columns(
                     }
                 }
 
-                // 5. Qualify outputs
+                // 6. Qualify outputs
                 if first_error.borrow().is_none() {
                     if let Err(err) = qualify_outputs_select(&mut select) {
                         *first_error.borrow_mut() = Some(err);
                     }
                 }
 
-                // 6. Expand GROUP BY positional refs
+                // 7. Expand GROUP BY positional refs
                 if first_error.borrow().is_none() {
                     if let Err(err) = expand_group_by(&mut select, dialect) {
                         *first_error.borrow_mut() = Some(err);
@@ -665,6 +676,107 @@ fn rewrite_using_columns_in_expression(
     if let Ok(next) = transformed {
         *expr = next;
     }
+}
+
+/// Normalize ambiguous two-part column references into struct/JSON field access.
+///
+/// SQL parsers cannot distinguish `table.column` from `column.field` without a
+/// scope and schema. If the apparent table is not a source but resolves as an
+/// unambiguous column in the current scope, rewrite it to a [`DotAccess`] rooted
+/// at the qualified source column. Validation calls this same helper so it uses
+/// exactly the same interpretation as schema-aware analysis and lineage.
+pub(crate) fn normalize_dotted_columns(
+    select: &mut Select,
+    schema: &dyn Schema,
+    infer_schema: bool,
+) -> QualifyColumnsResult<()> {
+    let scope_expression = Expression::Select(Box::new(select.clone()));
+    let scope = build_scope(&scope_expression);
+    let mut resolver = Resolver::new(&scope, schema, infer_schema);
+    normalize_dotted_columns_in_scope(select, &scope, &mut resolver)
+}
+
+fn normalize_dotted_columns_in_scope(
+    select: &mut Select,
+    scope: &Scope,
+    resolver: &mut Resolver,
+) -> QualifyColumnsResult<()> {
+    for expression in &mut select.expressions {
+        normalize_dotted_columns_in_expression(expression, scope, resolver)?;
+    }
+    if let Some(where_clause) = &mut select.where_clause {
+        normalize_dotted_columns_in_expression(&mut where_clause.this, scope, resolver)?;
+    }
+    if let Some(group_by) = &mut select.group_by {
+        for expression in &mut group_by.expressions {
+            normalize_dotted_columns_in_expression(expression, scope, resolver)?;
+        }
+    }
+    if let Some(having) = &mut select.having {
+        normalize_dotted_columns_in_expression(&mut having.this, scope, resolver)?;
+    }
+    if let Some(qualify) = &mut select.qualify {
+        normalize_dotted_columns_in_expression(&mut qualify.this, scope, resolver)?;
+    }
+    if let Some(order_by) = &mut select.order_by {
+        for ordered in &mut order_by.expressions {
+            normalize_dotted_columns_in_expression(&mut ordered.this, scope, resolver)?;
+        }
+    }
+    for join in &mut select.joins {
+        normalize_dotted_columns_in_expression(&mut join.this, scope, resolver)?;
+        if let Some(on) = &mut join.on {
+            normalize_dotted_columns_in_expression(on, scope, resolver)?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_dotted_columns_in_expression(
+    expression: &mut Expression,
+    scope: &Scope,
+    resolver: &mut Resolver,
+) -> QualifyColumnsResult<()> {
+    let resolver = RefCell::new(resolver);
+    let transformed = transform_recursive(expression.clone(), &|node| {
+        let Expression::Column(column) = node else {
+            return Ok(node);
+        };
+        let Some(root) = column.table.as_ref() else {
+            return Ok(Expression::Column(column));
+        };
+
+        let root_is_source = scope
+            .sources
+            .keys()
+            .any(|source| source.eq_ignore_ascii_case(&root.name));
+        if root_is_source {
+            return Ok(Expression::Column(column));
+        }
+
+        let Some(source_name) = resolver.borrow_mut().get_table(&root.name) else {
+            return Ok(Expression::Column(column));
+        };
+
+        let root_column = Expression::boxed_column(Column {
+            name: root.clone(),
+            table: Some(Identifier::new(source_name)),
+            join_mark: column.join_mark,
+            trailing_comments: column.trailing_comments.clone(),
+            span: column.span,
+            inferred_type: None,
+        });
+
+        Ok(Expression::Dot(Box::new(DotAccess {
+            this: root_column,
+            field: column.name.clone(),
+            inferred_type: None,
+        })))
+    })
+    .map_err(|error| QualifyColumnsError::CannotAutoJoin(error.to_string()))?;
+
+    *expression = transformed;
+    Ok(())
 }
 
 /// Qualify columns in a scope by adding table qualifiers
@@ -2902,6 +3014,76 @@ mod tests {
         let aliased = create_alias(col, "total");
         let sql = gen(&aliased);
         assert!(sql.contains("AS") || sql.contains("total"));
+    }
+
+    #[test]
+    fn test_qualify_columns_normalizes_struct_field_access_issue_408() {
+        let struct_type = DataType::Struct {
+            fields: vec![crate::expressions::StructField::new(
+                "field_value".into(),
+                DataType::Text,
+            )],
+            nested: true,
+        };
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "source_table",
+                &[
+                    ("composite_value".into(), struct_type.clone()),
+                    (
+                        "nested_items".into(),
+                        DataType::Array {
+                            element_type: Box::new(struct_type),
+                            dimension: None,
+                        },
+                    ),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let cases = [
+            (
+                "SELECT composite_value.field_value AS output_value FROM source_table",
+                "source_table",
+                "composite_value",
+            ),
+            (
+                "SELECT item.field_value AS output_value FROM source_table s \
+                 CROSS JOIN UNNEST(s.nested_items) AS expanded(item)",
+                "expanded",
+                "item",
+            ),
+        ];
+
+        for (sql, expected_table, expected_column) in cases {
+            let qualified = qualify_columns(
+                parse(sql),
+                &schema,
+                &QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB),
+            )
+            .unwrap_or_else(|error| panic!("qualification failed for {sql:?}: {error}"));
+            let Expression::Select(select) = qualified else {
+                panic!("expected SELECT");
+            };
+            let Expression::Alias(alias) = &select.expressions[0] else {
+                panic!("expected aliased projection");
+            };
+            let Expression::Dot(dot) = &alias.this else {
+                panic!("expected normalized Dot, got {:?}", alias.this);
+            };
+            let Expression::Column(base) = &dot.this else {
+                panic!("expected column-backed Dot");
+            };
+
+            assert_eq!(
+                base.table.as_ref().map(|table| table.name.as_str()),
+                Some(expected_table)
+            );
+            assert_eq!(base.name.name, expected_column);
+            assert_eq!(dot.field.name, "field_value");
+        }
     }
 
     #[test]

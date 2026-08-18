@@ -521,6 +521,30 @@ describe('Polyglot SDK', () => {
       ).toEqual(['aggregation', 'aggregation', 'aggregation']);
     });
 
+    it('should classify DuckDB null-preserving arg extrema as aggregations', () => {
+      const result = analyzeQuery(
+        'SELECT ARG_MAX_NULL(label, score), ARG_MIN_NULL(label, score) FROM source_table',
+        { dialect: Dialect.DuckDB },
+      );
+
+      expect(result.success).toBe(true);
+      expect(
+        result.analysis?.projections.map(({ transformKind }) => transformKind),
+      ).toEqual(['aggregation', 'aggregation']);
+    });
+
+    it('should classify DuckDB product, histogram, and quantile aggregates', () => {
+      const result = analyzeQuery(
+        'SELECT PRODUCT(x), APPROX_QUANTILE(x, 0.5), HISTOGRAM_EXACT(x, [1, 2]), MAD(x), QUANTILE(x, 0.5), QUANTILE_CONT(x, 0.5), QUANTILE_DISC(x, 0.5), RESERVOIR_QUANTILE(x, 0.5) FROM source_table',
+        { dialect: Dialect.DuckDB },
+      );
+
+      expect(result.success).toBe(true);
+      expect(
+        result.analysis?.projections.map(({ transformKind }) => transformKind),
+      ).toEqual(Array.from({ length: 8 }, () => 'aggregation'));
+    });
+
     it('should expose set-operation branch roles', () => {
       const union = analyzeQuery('SELECT a FROM x UNION SELECT b FROM y');
       const except = analyzeQuery('SELECT a FROM x EXCEPT SELECT b FROM y');

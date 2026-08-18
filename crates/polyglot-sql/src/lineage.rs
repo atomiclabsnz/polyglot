@@ -5067,6 +5067,79 @@ FROM t JOIN UNNEST(t.items) AS item ON TRUE
     }
 
     #[test]
+    fn test_lineage_with_schema_resolves_struct_fields_issue_408() {
+        let struct_type = DataType::Struct {
+            fields: vec![crate::expressions::StructField::new(
+                "field_value".into(),
+                DataType::Text,
+            )],
+            nested: true,
+        };
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "source_table",
+                &[
+                    ("composite_value".into(), struct_type.clone()),
+                    (
+                        "nested_items".into(),
+                        DataType::Array {
+                            element_type: Box::new(struct_type),
+                            dimension: None,
+                        },
+                    ),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let direct = parse_dialect(
+            "SELECT composite_value.field_value AS output_value FROM source_table",
+            DialectType::DuckDB,
+        );
+        let direct_node = lineage_with_schema(
+            "output_value",
+            &direct,
+            Some(&schema),
+            Some(DialectType::DuckDB),
+            false,
+        )
+        .expect("direct struct lineage");
+        assert_eq!(
+            direct_node.expression.inferred_type(),
+            Some(&DataType::Text)
+        );
+        assert_lineage_contains(&direct_node, "source_table.composite_value");
+
+        let unnested = parse_dialect(
+            "SELECT item.field_value AS output_value FROM source_table s \
+             CROSS JOIN UNNEST(s.nested_items) AS expanded(item)",
+            DialectType::DuckDB,
+        );
+        let unnest_node = lineage_with_schema(
+            "output_value",
+            &unnested,
+            Some(&schema),
+            Some(DialectType::DuckDB),
+            false,
+        )
+        .expect("UNNEST struct lineage");
+        assert_eq!(
+            unnest_node.expression.inferred_type(),
+            Some(&DataType::Text)
+        );
+        assert!(
+            unnest_node.walk().any(|node| {
+                node.source_kind == SourceKind::Table
+                    && node.source_name == "source_table"
+                    && node.name.ends_with(".nested_items")
+            }),
+            "expected physical nested_items lineage, got {:?}",
+            lineage_names(&unnest_node)
+        );
+    }
+
+    #[test]
     fn test_lineage_lateral_view_columns_resolve_to_virtual_sources() {
         let cases = [
             (

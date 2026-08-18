@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::dialects::DialectType;
 use crate::expressions::{
-    BinaryOp, DataType, Expression, Function, IfFunc, ListAggOverflow, Literal, Map, Nvl2Func,
-    Struct, StructField, Subscript,
+    BinaryOp, DataType, DotAccess, Expression, Function, IfFunc, ListAggOverflow, Literal, Map,
+    Nvl2Func, Struct, StructField, Subscript,
 };
 use crate::schema::{normalize_name, Schema, SchemaError, SchemaResult, TABLE_PARTS};
 
@@ -612,8 +612,8 @@ impl<'a> TypeAnnotator<'a> {
             // ============================================
             Expression::Subscript(sub) => self.annotate_subscript(sub),
 
-            // Dot access (struct.field) - returns Unknown without schema
-            Expression::Dot(_) => None,
+            // Dot access (struct.field) - resolve the field from the base STRUCT type
+            Expression::Dot(dot) => self.annotate_dot(dot),
 
             // ============================================
             // 3.1.9: STRUCT Construction
@@ -819,6 +819,11 @@ impl<'a> TypeAnnotator<'a> {
 
             // Column - leaf node, no children to recurse
             Expression::Column(_) => {}
+
+            // Dot access - the field is an identifier, so only the base is typed
+            Expression::Dot(dot) => {
+                self.annotate_in_place(&mut dot.this);
+            }
 
             // Function
             Expression::Function(f) => {
@@ -1122,6 +1127,20 @@ impl<'a> TypeAnnotator<'a> {
         }
     }
 
+    /// Annotate a named field lookup from the type of its base expression.
+    fn annotate_dot(&mut self, dot: &DotAccess) -> Option<DataType> {
+        let base_type = self.annotate(&dot.this)?;
+        let DataType::Struct { fields, .. } = base_type else {
+            return None;
+        };
+        let field_name = normalize_name(&dot.field.name, self._dialect, false, true);
+
+        fields
+            .into_iter()
+            .find(|field| normalize_name(&field.name, self._dialect, false, true) == field_name)
+            .map(|field| field.data_type)
+    }
+
     /// Annotate a STRUCT literal
     fn annotate_struct(&mut self, s: &Struct) -> Option<DataType> {
         let fields: Vec<StructField> = s
@@ -1375,8 +1394,18 @@ impl<'a> TypeAnnotator<'a> {
                 scale: None,
             }),
             "MIN" | "MAX" => {
-                // Preserves input type
-                args.first().and_then(|arg| self.annotate(arg))
+                // DuckDB's two-argument MIN/MAX aggregate overloads return the
+                // bottom/top N values as a list. Other parsed aggregate forms
+                // preserve the input type.
+                let input_type = args.first().and_then(|arg| self.annotate(arg));
+                if args.len() == 2 {
+                    input_type.map(|element_type| DataType::Array {
+                        element_type: Box::new(element_type),
+                        dimension: None,
+                    })
+                } else {
+                    input_type
+                }
             }
             "STRING_AGG" | "GROUP_CONCAT" | "LISTAGG" | "ARRAY_AGG" => Some(DataType::VarChar {
                 length: None,
@@ -2384,6 +2413,20 @@ mod tests {
             Some(DataType::VarChar {
                 length: None,
                 parenthesized_length: false
+            })
+        );
+
+        // DuckDB MIN/MAX(value, n) return a list of the input type.
+        let top_n_type = annotator
+            .get_aggregate_return_type("MAX", &[make_string_literal("a"), make_int_literal(2)]);
+        assert_eq!(
+            top_n_type,
+            Some(DataType::Array {
+                element_type: Box::new(DataType::VarChar {
+                    length: None,
+                    parenthesized_length: false,
+                }),
+                dimension: None,
             })
         );
     }

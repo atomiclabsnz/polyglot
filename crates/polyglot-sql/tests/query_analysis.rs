@@ -613,7 +613,7 @@ fn analyze_query_classifies_typed_aggregates() {
     );
 
     let duckdb_analysis = analyze_query(
-        "SELECT COUNT_IF(numeric_value > 0), MEDIAN(numeric_value), FIRST(numeric_value) FROM source_table",
+        "SELECT COUNT_IF(numeric_value > 0), MEDIAN(numeric_value), FIRST(numeric_value), ARG_MAX_NULL(label, numeric_value), ARG_MIN_NULL(label, numeric_value) FROM source_table",
         AnalyzeQueryOptions {
             dialect: DialectType::DuckDB,
             schema: None,
@@ -621,7 +621,7 @@ fn analyze_query_classifies_typed_aggregates() {
     )
     .unwrap();
 
-    assert_eq!(duckdb_analysis.projections.len(), 3);
+    assert_eq!(duckdb_analysis.projections.len(), 5);
     assert!(duckdb_analysis
         .projections
         .iter()
@@ -854,6 +854,19 @@ fn unnest_analysis_schema() -> ValidationSchema {
     .unwrap()
 }
 
+fn struct_field_analysis_schema() -> ValidationSchema {
+    serde_json::from_value(json!({
+        "tables": [{
+            "name": "source_table",
+            "columns": [
+                {"name": "nested_items", "type": "STRUCT(field_value VARCHAR)[]"},
+                {"name": "composite_value", "type": "STRUCT(field_value VARCHAR, label VARCHAR)"}
+            ]
+        }]
+    }))
+    .unwrap()
+}
+
 #[test]
 fn analyze_query_resolves_nested_set_operation_inside_derived_table() {
     let analysis = analyze_query(
@@ -951,6 +964,47 @@ fn analyze_query_resolves_unnest_virtual_output_aliases_with_schema() {
                     && reference.column == "arr"),
             "expected t.arr upstream for {sql:?}, got {:?}",
             analysis.projections[0].upstream
+        );
+    }
+}
+
+#[test]
+fn analyze_query_resolves_struct_fields_and_types_issue_408() {
+    let cases = [
+        (
+            "SELECT composite_value.field_value AS output_value FROM source_table",
+            "composite_value",
+        ),
+        (
+            "SELECT source_table.composite_value.field_value AS output_value FROM source_table",
+            "composite_value",
+        ),
+        (
+            "SELECT item.field_value AS output_value FROM source_table s \
+             CROSS JOIN UNNEST(s.nested_items) AS expanded(item)",
+            "nested_items",
+        ),
+    ];
+
+    for (sql, expected_column) in cases {
+        let analysis = analyze_query(
+            sql,
+            AnalyzeQueryOptions {
+                dialect: DialectType::DuckDB,
+                schema: Some(struct_field_analysis_schema()),
+            },
+        )
+        .unwrap_or_else(|error| panic!("analyze_query failed for {sql:?}: {error}"));
+        let projection = &analysis.projections[0];
+
+        assert_eq!(projection.type_hint.as_deref(), Some("TEXT"));
+        assert!(
+            projection.upstream.iter().any(|reference| {
+                reference.table.as_deref() == Some("source_table")
+                    && reference.column == expected_column
+            }),
+            "expected source_table.{expected_column} upstream for {sql:?}, got {:?}",
+            projection.upstream
         );
     }
 }

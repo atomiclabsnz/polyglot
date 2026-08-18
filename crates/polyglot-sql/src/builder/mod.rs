@@ -186,6 +186,7 @@ pub fn col(name: &str) -> Expr {
             expr = Expression::Dot(Box::new(DotAccess {
                 this: expr,
                 field: builder_identifier(field),
+                inferred_type: None,
             }));
         }
 
@@ -2781,6 +2782,27 @@ mod tests {
             .from("items")
             .to_sql();
         assert_eq!(sql, "SELECT price * quantity AS total FROM items");
+    }
+
+    #[test]
+    fn test_nested_operator_grouping() {
+        assert_eq!(
+            or(col("a").eq(lit(1)), col("b").eq(lit(2)))
+                .and(col("c").eq(lit(3)))
+                .to_sql(),
+            "(a = 1 OR b = 2) AND c = 3"
+        );
+        assert_eq!(
+            col("a")
+                .eq(lit(1))
+                .and(or(col("b").eq(lit(2)), col("c").eq(lit(3))))
+                .to_sql(),
+            "a = 1 AND (b = 2 OR c = 3)"
+        );
+        assert_eq!(col("a").add(col("b")).mul(col("c")).to_sql(), "(a + b) * c");
+        assert_eq!(col("a").mul(col("b").add(col("c"))).to_sql(), "a * (b + c)");
+        assert_eq!(col("a").sub(col("b").sub(col("c"))).to_sql(), "a - (b - c)");
+        assert_eq!(col("a").div(col("b").div(col("c"))).to_sql(), "a / (b / c)");
     }
 
     #[test]
