@@ -3136,6 +3136,61 @@ mod tests {
     }
 
     #[test]
+    fn test_qualify_columns_inside_window_value_functions() {
+        // The whole window value-function family carries columns in its *arguments*, not just in
+        // its OVER clause: `LAG(val)`, `FIRST_VALUE(val)`, `NTH_VALUE(val, 2)`. Transforms have to
+        // reach them, or qualification stops at the window frame and leaves the value column bare.
+        let mut schema = MappingSchema::new();
+        schema
+            .add_table(
+                "t1",
+                &[
+                    ("id".to_string(), DataType::BigInt { length: None }),
+                    ("grp".to_string(), DataType::BigInt { length: None }),
+                    ("val".to_string(), DataType::BigInt { length: None }),
+                    ("fallback".to_string(), DataType::BigInt { length: None }),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let qualified = |sql: &str| -> String {
+            let result = qualify_columns(parse(sql), &schema, &QualifyColumnsOptions::new())
+                .expect("qualify");
+            gen(&result)
+        };
+
+        let sql = qualified(
+            "SELECT LAG(val) OVER (PARTITION BY grp ORDER BY id) AS prev, \
+             LEAD(val, 1, fallback) OVER (ORDER BY id) AS nxt \
+             FROM t1",
+        );
+        assert!(sql.contains("t1.val"), "LAG/LEAD value column: {sql}");
+        assert!(sql.contains("t1.fallback"), "LEAD default column: {sql}");
+
+        for (sql, what) in [
+            (
+                qualified("SELECT FIRST_VALUE(val) OVER (ORDER BY id) AS f FROM t1"),
+                "FIRST_VALUE",
+            ),
+            (
+                qualified("SELECT LAST_VALUE(val) OVER (ORDER BY id) AS l FROM t1"),
+                "LAST_VALUE",
+            ),
+            (
+                qualified("SELECT NTH_VALUE(val, 2) OVER (ORDER BY id) AS n FROM t1"),
+                "NTH_VALUE",
+            ),
+        ] {
+            assert!(
+                sql.contains("t1.val"),
+                "{what} value column should be qualified: {sql}"
+            );
+            assert!(sql.contains("t1.id"), "{what} OVER clause: {sql}");
+        }
+    }
+
+    #[test]
     fn test_qualify_outputs_basic() {
         let expr = parse("SELECT a, b + c FROM t");
         let scope = build_scope(&expr);
