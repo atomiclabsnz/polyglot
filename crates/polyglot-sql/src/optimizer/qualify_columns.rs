@@ -2897,6 +2897,54 @@ mod tests {
         assert!(sql.contains("users.email"));
     }
 
+    /// A star expands in the table's **declared** column order. The test above only asserts that
+    /// each column is present, which a hash-ordered expansion also satisfies — but order is part of
+    /// the contract (`INSERT INTO t SELECT * FROM s` binds by position), and it used to differ from
+    /// run to run for the same schema.
+    #[test]
+    fn test_qualify_columns_expands_star_in_declared_order() {
+        let mut schema = MappingSchema::new();
+        schema
+            .add_table(
+                "users",
+                &[
+                    (
+                        "id".to_string(),
+                        DataType::Int {
+                            length: None,
+                            integer_spelling: false,
+                        },
+                    ),
+                    ("name".to_string(), DataType::Text),
+                    ("email".to_string(), DataType::Text),
+                    ("created_at".to_string(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        // Deterministic across `HashMap` seeds: same schema, same expansion, every time.
+        for _ in 0..8 {
+            let result = qualify_columns(
+                parse("SELECT * FROM users"),
+                &schema,
+                &QualifyColumnsOptions::new(),
+            )
+            .expect("qualify");
+            let sql = gen(&result);
+            let positions: Vec<usize> = ["id", "name", "email", "created_at"]
+                .iter()
+                .map(|c| {
+                    sql.find(&format!("users.{c}"))
+                        .unwrap_or_else(|| panic!("{c} missing from {sql}"))
+                })
+                .collect();
+            let mut sorted = positions.clone();
+            sorted.sort_unstable();
+            assert_eq!(positions, sorted, "declared order not preserved: {sql}");
+        }
+    }
+
     #[test]
     fn test_qualify_columns_expands_group_by_positions() {
         let expr = parse("SELECT a, b FROM t GROUP BY 1, 2");

@@ -94,6 +94,83 @@ impl ColumnInfo {
     }
 }
 
+/// A table's columns, kept in **declared order**.
+///
+/// Column order is part of a table's contract, not presentation: `SELECT *` expands in it, and
+/// `INSERT INTO t SELECT * FROM s` / `CREATE TABLE AS` bind by position. A bare `HashMap` drops
+/// that order, so star expansion came out in hash-iteration order — a different order for the same
+/// schema on every run. The declared order is therefore kept alongside a hash index, so lookups
+/// stay O(1) and iteration stays deterministic. (`TypeInferenceSchema` in `validation.rs` keeps
+/// the same `column_order` + map pair, for the same reason.)
+#[derive(Debug, Clone, Default)]
+pub struct TableColumns {
+    /// Column names in the order `add_table` received them.
+    order: Vec<String>,
+    /// Name -> column, for lookup.
+    columns: HashMap<String, ColumnInfo>,
+}
+
+impl TableColumns {
+    /// An empty column set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a column, or replace one already present. A replacement keeps the column's original
+    /// position — redefining a column's type does not move it to the end.
+    pub fn insert(&mut self, name: String, info: ColumnInfo) -> Option<ColumnInfo> {
+        match self.columns.insert(name.clone(), info) {
+            Some(previous) => Some(previous),
+            None => {
+                self.order.push(name);
+                None
+            }
+        }
+    }
+
+    /// The column named `name`, if present.
+    pub fn get(&self, name: &str) -> Option<&ColumnInfo> {
+        self.columns.get(name)
+    }
+
+    /// Whether `name` is a column of this table.
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.columns.contains_key(name)
+    }
+
+    /// How many columns the table has.
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// Whether the table has no columns.
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    /// The column names, in declared order.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.order.iter()
+    }
+
+    /// The columns with their names, in declared order.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ColumnInfo)> {
+        self.order
+            .iter()
+            .filter_map(move |name| self.columns.get(name).map(|info| (name, info)))
+    }
+}
+
+impl FromIterator<(String, ColumnInfo)> for TableColumns {
+    fn from_iter<I: IntoIterator<Item = (String, ColumnInfo)>>(iter: I) -> Self {
+        let mut cols = TableColumns::new();
+        for (name, info) in iter {
+            cols.insert(name, info);
+        }
+        cols
+    }
+}
+
 /// A mapping-based schema implementation
 ///
 /// Supports nested schemas with different levels:
@@ -121,8 +198,8 @@ pub struct MappingSchema {
 pub enum SchemaNode {
     /// Intermediate node (database or catalog)
     Namespace(HashMap<String, SchemaNode>),
-    /// Leaf node (table with columns)
-    Table(HashMap<String, ColumnInfo>),
+    /// Leaf node (table with its columns, in declared order)
+    Table(TableColumns),
 }
 
 impl Default for MappingSchema {
@@ -201,7 +278,7 @@ impl MappingSchema {
     }
 
     /// Get the column mapping for a table
-    fn find_table(&self, table: &str) -> SchemaResult<&HashMap<String, ColumnInfo>> {
+    fn find_table(&self, table: &str) -> SchemaResult<&TableColumns> {
         let parts = self.parse_table_parts(table);
 
         // Use trie to find table
@@ -227,7 +304,7 @@ impl MappingSchema {
     }
 
     /// Navigate the schema tree to find a table's columns
-    fn navigate_to_table(&self, parts: &[String]) -> SchemaResult<&HashMap<String, ColumnInfo>> {
+    fn navigate_to_table(&self, parts: &[String]) -> SchemaResult<&TableColumns> {
         let mut current = &self.mapping;
 
         for (i, part) in parts.iter().enumerate() {
@@ -256,11 +333,7 @@ impl MappingSchema {
     }
 
     /// Add a table to the schema
-    fn add_table_internal(
-        &mut self,
-        parts: &[String],
-        columns: HashMap<String, ColumnInfo>,
-    ) -> SchemaResult<()> {
+    fn add_table_internal(&mut self, parts: &[String], columns: TableColumns) -> SchemaResult<()> {
         if parts.is_empty() {
             return Err(SchemaError::InvalidStructure(
                 "Table name cannot be empty".to_string(),
@@ -345,7 +418,7 @@ impl Schema for MappingSchema {
     ) -> SchemaResult<()> {
         let parts = self.parse_table_parts(table);
 
-        let cols: HashMap<String, ColumnInfo> = columns
+        let cols: TableColumns = columns
             .iter()
             .map(|(name, dtype)| {
                 let normalized_name = self.normalize_name(name, false);
@@ -362,6 +435,7 @@ impl Schema for MappingSchema {
         let cols = self.find_table(table)?;
         let table_key = self.normalize_name(table, true);
 
+        // Declared order (see `TableColumns`) — callers expand `SELECT *` from this.
         // Check visibility
         if let Some(visible_cols) = self.visible.get(&table_key) {
             Ok(cols
@@ -574,6 +648,76 @@ mod tests {
         assert!(schema.has_column("users", "id"));
         assert!(schema.has_column("users", "name"));
         assert!(!schema.has_column("users", "email"));
+    }
+
+    /// A table's columns come back in the order they were declared, not hash order. `SELECT *`
+    /// expands from this list and `INSERT INTO t SELECT * FROM s` binds by position, so the order
+    /// is part of the schema's contract; a `HashMap` used to reorder it differently every run.
+    #[test]
+    fn test_column_names_are_in_declared_order() {
+        let int = DataType::Int {
+            length: None,
+            integer_spelling: false,
+        };
+        let text = DataType::VarChar {
+            length: None,
+            parenthesized_length: false,
+        };
+        let columns = vec![
+            ("id".to_string(), int.clone()),
+            ("label".to_string(), text.clone()),
+            ("amt".to_string(), int.clone()),
+            ("created_at".to_string(), text),
+        ];
+
+        let mut schema = MappingSchema::new();
+        schema.add_table("t", &columns, None).unwrap();
+        assert_eq!(
+            schema.column_names("t").unwrap(),
+            vec!["id", "label", "amt", "created_at"]
+        );
+
+        // Re-declaring a table replaces it wholesale, in the new order.
+        schema
+            .add_table(
+                "t",
+                &[("z".to_string(), int.clone()), ("a".to_string(), int)],
+                None,
+            )
+            .unwrap();
+        assert_eq!(schema.column_names("t").unwrap(), vec!["z", "a"]);
+    }
+
+    /// Redefining a column keeps its position — a type correction must not move a column to the
+    /// end of the table.
+    #[test]
+    fn test_repeated_column_keeps_its_position() {
+        let int = DataType::Int {
+            length: None,
+            integer_spelling: false,
+        };
+        let text = DataType::VarChar {
+            length: None,
+            parenthesized_length: false,
+        };
+        let mut cols = TableColumns::new();
+        cols.insert("id".to_string(), ColumnInfo::new(int.clone()));
+        cols.insert("label".to_string(), ColumnInfo::new(text.clone()));
+        cols.insert("amt".to_string(), ColumnInfo::new(int));
+        cols.insert("label".to_string(), ColumnInfo::new(text.clone()));
+
+        assert_eq!(
+            cols.keys().cloned().collect::<Vec<_>>(),
+            vec!["id", "label", "amt"]
+        );
+        assert_eq!(cols.len(), 3);
+        assert_eq!(cols.get("label").map(|c| c.data_type.clone()), Some(text));
+        assert_eq!(
+            cols.iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>(),
+            vec!["id", "label", "amt"]
+        );
     }
 
     #[test]
