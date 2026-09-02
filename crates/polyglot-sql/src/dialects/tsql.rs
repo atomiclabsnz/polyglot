@@ -2325,6 +2325,8 @@ impl TSQLDialect {
         Expression::Column(Box::new(Column {
             name: identifier,
             table,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,

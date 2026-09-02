@@ -706,6 +706,8 @@ impl DialectImpl for BigQueryDialect {
                                     *grouped = Expression::boxed_column(Column {
                                         name: alias_ident.clone(),
                                         table: None,
+                                        schema: None,
+                                        catalog: None,
                                         join_mark: false,
                                         trailing_comments: Vec::new(),
                                         span: None,
@@ -747,6 +749,8 @@ impl DialectImpl for BigQueryDialect {
                 let col_ref = Expression::boxed_column(Column {
                     name: Identifier::new("_col"),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,

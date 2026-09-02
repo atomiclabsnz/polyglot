@@ -4190,6 +4190,8 @@ impl Generator {
         Expression::Column(Box::new(Column {
             name: identifier,
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,
@@ -16774,25 +16776,37 @@ impl Generator {
         Ok(())
     }
 
-    fn generate_column(&mut self, col: &Column) -> Result<()> {
+    /// Write a column's `catalog.schema.table.` prefix, if any.
+    ///
+    /// Every site that renders a column by hand must use this — a column can
+    /// carry up to three qualifiers, and writing only `table.` silently drops
+    /// the rest of a reference like `db.raw.orders.order_id`.
+    fn generate_column_qualifiers(&mut self, col: &Column) -> Result<()> {
         use crate::dialects::DialectType;
 
-        if let Some(table) = &col.table {
+        for qualifier in col.qualifiers() {
             // Exasol special case: LOCAL as column table prefix should NOT be quoted
             // LOCAL is a special keyword in Exasol for referencing aliases from the current scope
             // Only applies when: dialect is Exasol, name is "LOCAL" (case-insensitive), and not already quoted
             let is_exasol_local_prefix = matches!(self.config.dialect, Some(DialectType::Exasol))
-                && !table.quoted
-                && table.name.eq_ignore_ascii_case("LOCAL");
+                && !qualifier.quoted
+                && qualifier.name.eq_ignore_ascii_case("LOCAL");
 
             if is_exasol_local_prefix {
                 // Write LOCAL unquoted (this is special Exasol syntax, not a table reference)
                 self.write("LOCAL");
             } else {
-                self.generate_identifier(table)?;
+                self.generate_identifier(qualifier)?;
             }
             self.write(".");
         }
+        Ok(())
+    }
+
+    fn generate_column(&mut self, col: &Column) -> Result<()> {
+        use crate::dialects::DialectType;
+
+        self.generate_column_qualifiers(col)?;
         let postgres_qualified_keyword = col.table.is_some()
             && matches!(self.config.dialect, Some(DialectType::PostgreSQL))
             && !col.name.quoted
@@ -17873,10 +17887,7 @@ impl Generator {
         match &alias.this {
             Expression::Column(col) => {
                 // Generate column without trailing comments - they're in pre_alias_comments
-                if let Some(table) = &col.table {
-                    self.generate_identifier(table)?;
-                    self.write(".");
-                }
+                self.generate_column_qualifiers(col)?;
                 self.generate_identifier(&col.name)?;
             }
             _ => {
@@ -23790,10 +23801,7 @@ impl Generator {
             Expression::Column(col) => {
                 // Generate column with trailing comments but skip them if they're
                 // already captured in BinaryOp.left_comments to avoid duplication
-                if let Some(table) = &col.table {
-                    self.generate_identifier(table)?;
-                    self.write(".");
-                }
+                self.generate_column_qualifiers(col)?;
                 self.generate_identifier(&col.name)?;
                 // Oracle-style join marker (+)
                 if col.join_mark && self.config.supports_column_join_marks {
@@ -24221,10 +24229,7 @@ impl Generator {
         // Generate left expression, but skip trailing comments
         match &op.left {
             Expression::Column(col) => {
-                if let Some(table) = &col.table {
-                    self.generate_identifier(table)?;
-                    self.write(".");
-                }
+                self.generate_column_qualifiers(col)?;
                 self.generate_identifier(&col.name)?;
                 // Oracle-style join marker (+)
                 if col.join_mark && self.config.supports_column_join_marks {
@@ -24279,10 +24284,7 @@ impl Generator {
         // (the parent's left_comments will output them)
         match &op.right {
             Expression::Column(col) => {
-                if let Some(table) = &col.table {
-                    self.generate_identifier(table)?;
-                    self.write(".");
-                }
+                self.generate_column_qualifiers(col)?;
                 self.generate_identifier(&col.name)?;
                 // Oracle-style join marker (+)
                 if col.join_mark && self.config.supports_column_join_marks {
@@ -41183,9 +41185,11 @@ impl Generator {
                         .iter()
                         .any(|n| n.eq_ignore_ascii_case(&table_ident.name))
                     {
-                        // Strip the table qualifier
+                        // The reference names the MERGE target, so every
+                        // qualifier goes — leaving `schema.` behind would name
+                        // a relation that is not there any more.
                         let mut col = col.clone();
-                        col.table = None;
+                        col.unqualify();
                         return Expression::Column(col);
                     }
                 }

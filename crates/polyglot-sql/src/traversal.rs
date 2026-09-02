@@ -998,6 +998,8 @@ mod tests {
                 span: None,
             },
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -1193,6 +1195,8 @@ mod tests {
                     return Ok(Expression::boxed_column(Column {
                         name: Identifier::new("alpha"),
                         table: c.table.clone(),
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,

@@ -784,6 +784,8 @@ fn make_column_expr(name: &str, table: Option<&Identifier>) -> Expression {
     Expression::Column(Box::new(crate::expressions::Column {
         name: Identifier::new(name),
         table: table.cloned(),
+        schema: None,
+        catalog: None,
         join_mark: false,
         trailing_comments: Vec::new(),
         span: None,
@@ -2251,6 +2253,8 @@ fn resolve_unqualified_column(
         Expression::Column(Box::new(crate::expressions::Column {
             name: crate::expressions::Identifier::new(col_name.to_string()),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -3222,6 +3226,8 @@ fn make_table_column_node(table: &str, column: &str) -> LineageNode {
         Expression::Column(Box::new(crate::expressions::Column {
             name: crate::expressions::Identifier::new(column.to_string()),
             table: Some(crate::expressions::Identifier::new(table.to_string())),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -3279,6 +3285,8 @@ fn make_table_column_node_from_source(
             table: Some(crate::expressions::Identifier::new(
                 lineage_name.to_string(),
             )),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -4342,6 +4350,23 @@ select col_a from unioned";
             "Expected t.a in downstream, got: {:?}",
             names
         );
+    }
+
+    #[test]
+    fn test_schema_qualified_column_reference_resolves_to_its_source() {
+        // `raw.orders.order_id` used to parse as a Dot chain whose inner Column
+        // claimed table `raw`, column `orders`. The real column name was only
+        // the Dot's field, so this query resolved to
+        // `ColumnResolution { target: order_id, reason: NotFound }` — the
+        // reference the query is entirely about had no lineage at all.
+        let expr = parse_dialect(
+            "SELECT raw.orders.order_id FROM raw.orders",
+            DialectType::DuckDB,
+        );
+        let node = lineage("order_id", &expr, Some(DialectType::DuckDB), false).unwrap();
+
+        assert_eq!(node.name, "order_id");
+        assert_lineage_contains(&node, "orders.order_id");
     }
 
     #[test]

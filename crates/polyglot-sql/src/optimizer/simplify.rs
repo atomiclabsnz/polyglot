@@ -1227,6 +1227,8 @@ mod tests {
         Expression::boxed_column(Column {
             name: Identifier::new(name),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,

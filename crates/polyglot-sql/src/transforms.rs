@@ -1256,6 +1256,8 @@ pub fn eliminate_qualify(expr: Expression) -> Result<Expression> {
                                 Expression::Column(Box::new(crate::expressions::Column {
                                     name: a.alias.clone(),
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: vec![],
                                     span: None,
@@ -1343,6 +1345,8 @@ pub fn eliminate_qualify(expr: Expression) -> Result<Expression> {
                             this: Expression::Column(Box::new(crate::expressions::Column {
                                 name: window_alias_ident,
                                 table: None,
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: vec![],
                                 span: None,
@@ -1371,6 +1375,8 @@ fn extract_window_from_condition(
     let alias_col = Expression::Column(Box::new(crate::expressions::Column {
         name: alias.clone(),
         table: None,
+        schema: None,
+        catalog: None,
         join_mark: false,
         trailing_comments: vec![],
         span: None,
@@ -1779,6 +1785,8 @@ fn eliminate_distinct_on_select(
                                     crate::expressions::Column {
                                         name: alias.alias.clone(),
                                         table: None,
+                                        schema: None,
+                                        catalog: None,
                                         join_mark: false,
                                         trailing_comments: vec![],
                                         span: None,
@@ -1804,6 +1812,8 @@ fn eliminate_distinct_on_select(
                                     crate::expressions::Column {
                                         name: col.name.clone(),
                                         table: None,
+                                        schema: None,
+                                        catalog: None,
                                         join_mark: false,
                                         trailing_comments: vec![],
                                         span: None,
@@ -1874,6 +1884,8 @@ fn eliminate_distinct_on_select(
                                 left: Expression::Column(Box::new(crate::expressions::Column {
                                     name: row_number_alias,
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: vec![],
                                     span: None,
@@ -3132,7 +3144,7 @@ pub fn unqualify_columns(expr: Expression) -> Result<Expression> {
 fn unqualify_columns_recursive(expr: Expression) -> Expression {
     match expr {
         Expression::Column(mut col) => {
-            col.table = None;
+            col.unqualify();
             Expression::Column(col)
         }
         Expression::Select(mut select) => {
@@ -3508,6 +3520,8 @@ fn try_convert_generate_date_array_with_name(
                 this: Expression::Column(Box::new(crate::expressions::Column {
                     name: column_name.clone(),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -3584,6 +3598,8 @@ fn try_convert_generate_date_array_with_name(
                 expressions: vec![Expression::Column(Box::new(crate::expressions::Column {
                     name: column_name,
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -3950,6 +3966,8 @@ fn try_unwrap_unnest_gen_series(expr: &Expression) -> Option<Expression> {
     let value_col = Expression::boxed_column(Column {
         name: Identifier::new("value".to_string()),
         table: None,
+        schema: None,
+        catalog: None,
         join_mark: false,
         trailing_comments: vec![],
         span: None,
@@ -6379,6 +6397,8 @@ mod tests {
             this: Expression::boxed_column(Column {
                 name: Identifier::new("arr".to_string()),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: vec![],
                 span: None,
@@ -6401,6 +6421,8 @@ mod tests {
             this: Expression::boxed_column(Column {
                 name: Identifier::new("arr".to_string()),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: vec![],
                 span: None,
@@ -6690,6 +6712,8 @@ mod tests {
         let col = Expression::boxed_column(Column {
             name: Identifier::new("id".to_string()),
             table: Some(Identifier::new("users".to_string())),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -6735,6 +6759,8 @@ mod tests {
             expressions: vec![Expression::boxed_column(Column {
                 name: Identifier::new("a".to_string()),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: vec![],
                 span: None,
@@ -6750,6 +6776,8 @@ mod tests {
                     left: Expression::boxed_column(Column {
                         name: Identifier::new("x".to_string()),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -6758,6 +6786,8 @@ mod tests {
                     right: Expression::boxed_column(Column {
                         name: Identifier::new("y".to_string()),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -6802,6 +6832,8 @@ mod tests {
             left: Expression::boxed_column(Column {
                 name: Identifier::new("name".to_string()),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: vec![],
                 span: None,

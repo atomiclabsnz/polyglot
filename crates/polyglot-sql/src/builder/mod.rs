@@ -173,19 +173,25 @@ fn builder_table_ref(name: &str) -> TableRef {
 pub fn col(name: &str) -> Expr {
     let parts: Vec<&str> = name.split('.').collect();
     if parts.len() >= 3 && parts.iter().all(|part| !part.is_empty()) {
-        let mut expr = Expression::boxed_column(Column {
-            name: builder_identifier(parts[1]),
-            table: Some(builder_identifier(parts[0])),
-            join_mark: false,
-            trailing_comments: Vec::new(),
-            span: None,
-            inferred_type: None,
-        });
+        // Mirror the parser: dotted parts fill the column's
+        // catalog/schema/table qualifiers, and only what no longer fits is
+        // member access on the column's value.
+        let mut column = Column::from_identifier(builder_identifier(parts[0]));
+        let mut fields = Vec::new();
+        for part in &parts[1..] {
+            let ident = builder_identifier(part);
+            if column.can_absorb_qualifier() {
+                column.absorb_qualifier(ident);
+            } else {
+                fields.push(ident);
+            }
+        }
 
-        for field in &parts[2..] {
+        let mut expr = Expression::boxed_column(column);
+        for field in fields {
             expr = Expression::Dot(Box::new(DotAccess {
                 this: expr,
-                field: builder_identifier(field),
+                field,
                 inferred_type: None,
             }));
         }
@@ -197,6 +203,8 @@ pub fn col(name: &str) -> Expr {
         Expr(Expression::boxed_column(Column {
             name: builder_identifier(column),
             table: Some(builder_identifier(table)),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,
@@ -206,6 +214,8 @@ pub fn col(name: &str) -> Expr {
         Expr(Expression::boxed_column(Column {
             name: builder_identifier(name),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,
@@ -1258,9 +1268,17 @@ impl SelectBuilder {
     }
 
     fn join_with_kind(self, table_name: &str, on: Option<Expr>, kind: JoinKind) -> Self {
+        self.join_expr_with_kind(
+            Expression::Table(Box::new(builder_table_ref(table_name))),
+            on,
+            kind,
+        )
+    }
+
+    fn join_expr_with_kind(self, this: Expression, on: Option<Expr>, kind: JoinKind) -> Self {
         let join = Join {
             kind,
-            this: Expression::Table(Box::new(builder_table_ref(table_name))),
+            this,
             on: on.map(|expression| expression.0),
             using: Vec::new(),
             use_inner_keyword: false,
@@ -1335,6 +1353,20 @@ impl SelectBuilder {
     /// Add a `LEFT JOIN` clause with the given ON condition.
     pub fn left_join(self, table_name: &str, on: Expr) -> Self {
         self.join_with_kind(table_name, Some(on), JoinKind::Left)
+    }
+
+    /// Add an inner `JOIN` whose right side is an arbitrary expression rather than a bare table
+    /// name — a derived table (`JOIN (SELECT …) alias ON …`, built via [`subquery`]) or a
+    /// table-valued function, which [`SelectBuilder::join`] cannot express. The `FROM` counterpart
+    /// is [`SelectBuilder::from_expr`].
+    pub fn join_expr(self, this: Expr, on: Expr) -> Self {
+        self.join_expr_with_kind(this.0, Some(on), JoinKind::Inner)
+    }
+
+    /// `LEFT JOIN` companion of [`SelectBuilder::join_expr`] — the form a decorrelation rewrite
+    /// needs, where a group with no matching aggregate row must survive the join.
+    pub fn left_join_expr(self, this: Expr, on: Expr) -> Self {
+        self.join_expr_with_kind(this.0, Some(on), JoinKind::Left)
     }
 
     /// Add a predicate to the WHERE clause, combining repeated calls with `AND`.
@@ -3023,6 +3055,40 @@ mod tests {
         assert!(sql.contains("JOIN"));
         // Just verify the subquery builder doesn't panic
         let _sub = subquery(inner, "o");
+    }
+
+    #[test]
+    fn test_join_expr_and_left_join_expr_join_a_derived_table() {
+        // `join`/`left_join` take a table *name*, so a derived table — the shape a decorrelation
+        // rewrite produces — could not be expressed through the builder at all.
+        let totals = || {
+            subquery(
+                select([col("user_id"), func("SUM", [col("amount")]).alias("total")])
+                    .from("orders")
+                    .group_by(["user_id"]),
+                "o",
+            )
+        };
+
+        let inner = select(["u.name", "o.total"])
+            .from("users")
+            .join_expr(totals(), col("u.id").eq(col("o.user_id")))
+            .to_sql();
+        assert_eq!(
+            inner,
+            "SELECT u.name, o.total FROM users JOIN (SELECT user_id, SUM(amount) AS total \
+             FROM orders GROUP BY user_id) AS o ON u.id = o.user_id"
+        );
+
+        // The LEFT companion: a group with no aggregate row must keep its row.
+        let left = select(["u.name", "o.total"])
+            .from("users")
+            .left_join_expr(totals(), col("u.id").eq(col("o.user_id")))
+            .to_sql();
+        assert!(
+            left.contains("LEFT JOIN (SELECT user_id, SUM(amount) AS total FROM orders GROUP BY user_id) AS o ON u.id = o.user_id"),
+            "{left}"
+        );
     }
 
     // -- Step 6: SetOpBuilder tests --

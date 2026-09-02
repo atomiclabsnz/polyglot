@@ -748,6 +748,15 @@ where
             | Expression::Function(_)
             | Expression::Lead(_)
             | Expression::Lag(_)
+            // The rest of the window value-function family: their value argument (and any
+            // in-function ORDER BY) holds columns that transforms must reach, exactly as for
+            // LEAD/LAG above. Without this, `qualify_columns` leaves the column inside
+            // `FIRST_VALUE(val) OVER (...)` unqualified while qualifying the OVER clause
+            // around it.
+            | Expression::FirstValue(_)
+            | Expression::LastValue(_)
+            | Expression::NthValue(_)
+            | Expression::NTile(_)
             | Expression::Array(_)
             | Expression::Tuple(_)
             | Expression::ArrayFunc(_)
@@ -8763,6 +8772,8 @@ impl Dialect {
                     Expression::boxed_column(Column {
                         name: Identifier::new(&unit_str),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -8842,6 +8853,8 @@ impl Dialect {
                     Expression::boxed_column(Column {
                         name: Identifier::new(&unit_str),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -8851,6 +8864,8 @@ impl Dialect {
                         this: Expression::boxed_column(Column {
                             name: Identifier::new(&alias_name),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: vec![],
                             span: None,
@@ -9071,6 +9086,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9143,6 +9160,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9152,6 +9171,8 @@ impl Dialect {
                     this: Expression::boxed_column(Column {
                         name: Identifier::new(&col_name),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -9251,6 +9272,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9314,6 +9337,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9323,6 +9348,8 @@ impl Dialect {
                     this: Expression::boxed_column(Column {
                         name: Identifier::new(col_name),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,

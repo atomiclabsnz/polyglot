@@ -6593,6 +6593,8 @@ impl Parser {
                             this: Expression::boxed_column(Column {
                                 name: Identifier::new(&col_name),
                                 table: None,
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,
@@ -6610,6 +6612,8 @@ impl Parser {
                         Expression::boxed_column(Column {
                             name: Identifier::new(&col_name),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: t.trailing_comments,
                             span: None,
@@ -10596,6 +10600,8 @@ impl Parser {
                     Expression::boxed_column(Column {
                         name: id,
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -11412,6 +11418,8 @@ impl Parser {
                         Expression::boxed_column(Column {
                             name: col,
                             table: Some(col_name),
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: Vec::new(),
                             span: None,
@@ -11556,6 +11564,8 @@ impl Parser {
                     Expression::boxed_column(Column {
                         name: col,
                         table: Some(col_name),
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -13218,6 +13228,8 @@ impl Parser {
                             this: Box::new(Expression::boxed_column(Column {
                                 name: Identifier::new(col),
                                 table: None,
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,
@@ -13236,6 +13248,8 @@ impl Parser {
                         cols.push(Expression::boxed_column(Column {
                             name: Identifier::new(col),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: Vec::new(),
                             span: None,
@@ -13271,6 +13285,8 @@ impl Parser {
                         cols.push(Expression::boxed_column(Column {
                             name: Identifier::new(col),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: Vec::new(),
                             span: None,
@@ -14429,6 +14445,8 @@ impl Parser {
                                 Expression::boxed_column(Column {
                                     name: id,
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: Vec::new(),
                                     span: None,
@@ -14472,6 +14490,8 @@ impl Parser {
                                 Expression::boxed_column(Column {
                                     name: id,
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: Vec::new(),
                                     span: None,
@@ -14509,6 +14529,8 @@ impl Parser {
                                 Expression::boxed_column(Column {
                                     name: id,
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: Vec::new(),
                                     span: None,
@@ -21568,6 +21590,8 @@ impl Parser {
                     filter_column = Some(Box::new(Expression::boxed_column(Column {
                         name: Identifier::new(col),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -23725,6 +23749,8 @@ impl Parser {
                                 Expression::boxed_column(Column {
                                     name: Identifier::new(c),
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: Vec::new(),
                                     span: None,
@@ -23973,6 +23999,8 @@ impl Parser {
                                 left: Expression::boxed_column(Column {
                                     name: Identifier::new(nested_key),
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: Vec::new(),
                                     span: None,
@@ -23989,6 +24017,8 @@ impl Parser {
                             values.push(Expression::boxed_column(Column {
                                 name: Identifier::new(nested_key),
                                 table: None,
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,
@@ -24050,6 +24080,8 @@ impl Parser {
                                     left: Expression::boxed_column(Column {
                                         name: Identifier::new(key),
                                         table: None,
+                                        schema: None,
+                                        catalog: None,
                                         join_mark: false,
                                         trailing_comments: Vec::new(),
                                         span: None,
@@ -24066,6 +24098,8 @@ impl Parser {
                                 values.push(Expression::boxed_column(Column {
                                     name: Identifier::new(key),
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: Vec::new(),
                                     span: None,
@@ -24168,6 +24202,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: Identifier::quoted(token.text.to_string()),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -24197,6 +24233,8 @@ impl Parser {
                     return Ok(Expression::boxed_column(Column {
                         name: Identifier::new(format!("{}.{}.{}", first, second, third)),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -24206,6 +24244,8 @@ impl Parser {
                 return Ok(Expression::boxed_column(Column {
                     name: Identifier::new(format!("{}.{}", first, second)),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -24215,6 +24255,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: Identifier::new(first),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -24636,6 +24678,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: Identifier::new(ident),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -25247,6 +25291,8 @@ impl Parser {
                     value: Expression::boxed_column(Column {
                         name: Identifier::new(&param_name),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -26068,6 +26114,8 @@ impl Parser {
                         vars.push(Expression::Column(Box::new(Column {
                             name: Identifier::new(var_name),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: Vec::new(),
                             span: None,
@@ -26302,6 +26350,8 @@ impl Parser {
             Ok(Expression::boxed_column(Column {
                 table: Some(Identifier::new(parts[0].clone())),
                 name: Identifier::new(parts[1].clone()),
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -26314,6 +26364,8 @@ impl Parser {
             Ok(Expression::boxed_column(Column {
                 table: Some(Identifier::new(table_name)),
                 name: Identifier::new(column_name),
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -30722,6 +30774,8 @@ impl Parser {
             let col_expr = Expression::boxed_column(Column {
                 name: Identifier::new(col_name),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -30759,6 +30813,8 @@ impl Parser {
             let col_expr = Expression::boxed_column(Column {
                 name: Identifier::new(col_name),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -32234,6 +32290,8 @@ impl Parser {
                     this: Expression::boxed_column(Column {
                         name: ident,
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -32258,6 +32316,8 @@ impl Parser {
                     this: Expression::boxed_column(Column {
                         name: ident,
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -32285,6 +32345,8 @@ impl Parser {
                     this: Expression::boxed_column(Column {
                         name: ident,
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -32307,6 +32369,8 @@ impl Parser {
                     let col = Expression::boxed_column(Column {
                         name: col_ident,
                         table: Some(ident),
+                        schema: None,
+                        catalog: None,
                         join_mark: true,
                         trailing_comments,
                         span: None,
@@ -32329,6 +32393,8 @@ impl Parser {
                 let this = Expression::boxed_column(Column {
                     name: ident.clone(),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -32342,6 +32408,8 @@ impl Parser {
             let col = Expression::boxed_column(Column {
                 name: col_ident,
                 table: Some(ident),
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments,
                 span: None,
@@ -32387,6 +32455,8 @@ impl Parser {
         let col = Expression::boxed_column(Column {
             name: ident,
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments,
             span: None,
@@ -32636,6 +32706,8 @@ impl Parser {
                                                 span: None,
                                             },
                                             table: None,
+                                            schema: None,
+                                            catalog: None,
                                             join_mark: false,
                                             trailing_comments: Vec::new(),
                                             span: None,
@@ -32981,6 +33053,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: Identifier::new(original_text),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -33005,6 +33079,8 @@ impl Parser {
             return self.maybe_parse_subscript(Expression::boxed_column(Column {
                 name: Identifier::new(original_text),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -33056,6 +33132,8 @@ impl Parser {
             return self.maybe_parse_subscript(Expression::boxed_column(Column {
                 name: Identifier::new(original_text),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -33228,6 +33306,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: Identifier::new(original_text),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -33254,6 +33334,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: Identifier::new(original_text),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -33747,6 +33829,8 @@ impl Parser {
             let mut col = Expression::boxed_column(Column {
                 name: col_ident,
                 table: Some(ident),
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments,
                 span: None,
@@ -34050,6 +34134,8 @@ impl Parser {
                 return Ok(Expression::Column(Box::new(crate::expressions::Column {
                     name: Identifier::new(col_name),
                     table: Some(Identifier::new(name)),
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -34059,6 +34145,8 @@ impl Parser {
             return Ok(Expression::Column(Box::new(crate::expressions::Column {
                 name: Identifier::new(name),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -34081,6 +34169,8 @@ impl Parser {
                 return Ok(Expression::Column(Box::new(crate::expressions::Column {
                     name: Identifier::new(col_name),
                     table: Some(Identifier::new(name)),
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -34090,6 +34180,8 @@ impl Parser {
             return Ok(Expression::Column(Box::new(crate::expressions::Column {
                 name: Identifier::new(name),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -34129,6 +34221,8 @@ impl Parser {
                 return Ok(Expression::boxed_column(Column {
                     name: Identifier::new(token.text),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -34240,6 +34334,8 @@ impl Parser {
                         this: Expression::boxed_column(Column {
                             name: Identifier::new(name),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: Vec::new(),
                             span: None,
@@ -34258,6 +34354,8 @@ impl Parser {
                         this: Expression::boxed_column(Column {
                             name: Identifier::new(name),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: Vec::new(),
                             span: None,
@@ -34294,6 +34392,8 @@ impl Parser {
                 let mut col = Expression::boxed_column(Column {
                     name: col_ident,
                     table: Some(Identifier::new(name)),
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments,
                     span: None,
@@ -34323,6 +34423,8 @@ impl Parser {
             let col = Expression::boxed_column(Column {
                 name: ident,
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments,
                 span: None,
@@ -34608,6 +34710,8 @@ impl Parser {
             let mut col = Expression::boxed_column(Column {
                 name: col_ident,
                 table: Some(ident),
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments,
                 span: None,
@@ -34665,6 +34769,8 @@ impl Parser {
             let col = Expression::boxed_column(Column {
                 name: Identifier::new(token.text),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments,
                 span: None,
@@ -39616,6 +39722,8 @@ impl Parser {
                     return Ok(Expression::boxed_column(Column {
                         name: second_ident,
                         table: Some(first_ident),
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -39627,6 +39735,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: first_ident,
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -39651,6 +39761,8 @@ impl Parser {
                     return Ok(Expression::boxed_column(Column {
                         name: second_ident,
                         table: Some(first_ident),
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -39662,6 +39774,8 @@ impl Parser {
             return Ok(Expression::boxed_column(Column {
                 name: first_ident,
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -39676,6 +39790,36 @@ impl Parser {
     }
 
     /// Maybe parse subscript access (array[index], struct.field)
+    /// Attach one more dotted part to an already-parsed reference.
+    ///
+    /// A dotted name is a qualified column reference for as long as it fits the
+    /// `catalog.schema.table.column` shape a [`Column`] can hold, so
+    /// `raw.orders.order_id` stays a single `Column` (schema `raw`, table
+    /// `orders`, column `order_id`) rather than becoming a `Dot` chain whose
+    /// inner `Column` would claim table `raw`, column `orders`. Anything that
+    /// no longer fits — a fifth part, or a part hanging off a function call,
+    /// cast or subscript — is genuine member access and keeps its [`DotAccess`].
+    fn extend_dotted_reference(this: Expression, field: Identifier) -> Expression {
+        if let Expression::Column(mut column) = this {
+            // `t.c(+)` is a complete Oracle join-marked reference; a further part
+            // is access into its value, not another qualifier.
+            if !column.join_mark && column.can_absorb_qualifier() {
+                column.absorb_qualifier(field);
+                return Expression::Column(column);
+            }
+            return Expression::Dot(Box::new(DotAccess {
+                this: Expression::Column(column),
+                field,
+                inferred_type: None,
+            }));
+        }
+        Expression::Dot(Box::new(DotAccess {
+            this,
+            field,
+            inferred_type: None,
+        }))
+    }
+
     fn maybe_parse_subscript(&mut self, mut expr: Expression) -> Result<Expression> {
         loop {
             // ClickHouse: empty brackets [] in JSON paths represent Array(JSON) type access.
@@ -39935,8 +40079,8 @@ impl Parser {
                     // expr.* - struct field expansion with potential modifiers (EXCEPT, REPLACE, etc.)
                     let table_name = match &expr {
                         Expression::Column(col) => {
-                            if let Some(ref table) = col.table {
-                                Some(Identifier::new(format!("{}.{}", table.name, col.name.name)))
+                            if col.table.is_some() {
+                                Some(Identifier::new(col.dotted_name()))
                             } else {
                                 Some(col.name.clone())
                             }
@@ -39944,13 +40088,7 @@ impl Parser {
                         Expression::Dot(d) => {
                             fn dot_to_name_inner(expr: &Expression) -> String {
                                 match expr {
-                                    Expression::Column(col) => {
-                                        if let Some(ref table) = col.table {
-                                            format!("{}.{}", table.name, col.name.name)
-                                        } else {
-                                            col.name.name.clone()
-                                        }
-                                    }
+                                    Expression::Column(col) => col.dotted_name(),
                                     Expression::Dot(d) => {
                                         format!("{}.{}", dot_to_name_inner(&d.this), d.field.name)
                                     }
@@ -40078,11 +40216,7 @@ impl Parser {
                         if is_quoted {
                             ident.quoted = true;
                         }
-                        expr = Expression::Dot(Box::new(DotAccess {
-                            this: expr,
-                            field: ident,
-                            inferred_type: None,
-                        }));
+                        expr = Self::extend_dotted_reference(expr, ident);
                     }
                 } else if self.check(TokenType::Number) {
                     // Handle numeric field access like a.0 or x.1
@@ -49499,17 +49633,13 @@ impl Parser {
                 // Determine table name from the expression
                 let table_name = match &result {
                     Some(Expression::Column(col)) if col.table.is_none() => Some(col.name.clone()),
+                    // A qualified name like schema.table.* keeps every part
+                    Some(Expression::Column(col)) => Some(Identifier::new(col.dotted_name())),
                     Some(Expression::Dot(dot)) => {
                         // For deep qualified names like schema.table.*, use the whole expression name
                         fn dot_to_name(expr: &Expression) -> String {
                             match expr {
-                                Expression::Column(col) => {
-                                    if let Some(ref table) = col.table {
-                                        format!("{}.{}", table.name, col.name.name)
-                                    } else {
-                                        col.name.name.clone()
-                                    }
-                                }
+                                Expression::Column(col) => col.dotted_name(),
                                 Expression::Dot(d) => {
                                     format!("{}.{}", dot_to_name(&d.this), d.field.name)
                                 }
@@ -49535,17 +49665,25 @@ impl Parser {
                 ) && self.check(TokenType::Number))
             {
                 let token = self.advance();
+                // A numeric part is a ClickHouse tuple index (`expr.1`), i.e. member
+                // access on a value — never a name qualifier.
+                let is_numeric_index = token.token_type == TokenType::Number;
                 let field_ident = Identifier {
                     name: token.text,
                     quoted: token.token_type == TokenType::QuotedIdentifier,
                     trailing_comments: Vec::new(),
                     span: None,
                 };
-                result = Some(Expression::Dot(Box::new(DotAccess {
-                    this: result.take().unwrap(),
-                    field: field_ident,
-                    inferred_type: None,
-                })));
+                let this = result.take().unwrap();
+                result = Some(if is_numeric_index {
+                    Expression::Dot(Box::new(DotAccess {
+                        this,
+                        field: field_ident,
+                        inferred_type: None,
+                    }))
+                } else {
+                    Self::extend_dotted_reference(this, field_ident)
+                });
             } else {
                 break;
             }
@@ -49622,6 +49760,8 @@ impl Parser {
                     return Ok(Some(Expression::boxed_column(Column {
                         name: id.clone(),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -51799,6 +51939,8 @@ impl Parser {
                 span: None,
             },
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,
@@ -54483,6 +54625,8 @@ impl Parser {
                                             Expression::boxed_column(Column {
                                                 name: col_ident,
                                                 table: Some(table_ident),
+                                                schema: None,
+                                                catalog: None,
                                                 join_mark: false,
                                                 trailing_comments: Vec::new(),
                                                 span: None,
@@ -54585,6 +54729,8 @@ impl Parser {
                                                 Expression::boxed_column(Column {
                                                     name: col_ident,
                                                     table: Some(table_ident),
+                                                    schema: None,
+                                                    catalog: None,
                                                     join_mark: false,
                                                     trailing_comments: Vec::new(),
                                                     span: None,
@@ -55027,6 +55173,8 @@ impl Parser {
             Expression::boxed_column(Column {
                 name: parts.remove(0),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -55036,6 +55184,8 @@ impl Parser {
             Expression::boxed_column(Column {
                 name: parts.remove(1),
                 table: Some(parts.remove(0)),
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
@@ -65518,5 +65668,147 @@ mod grant_revoke_role_membership_regression_tests {
             crate::transpile(revoke, DialectType::PostgreSQL, DialectType::PostgreSQL).unwrap(),
             vec![revoke]
         );
+    }
+}
+
+#[cfg(test)]
+mod qualified_column_reference_tests {
+    use crate::expressions::Expression;
+    use crate::traversal::ExpressionWalk;
+    use crate::DialectType;
+
+    fn projection(sql: &str) -> Expression {
+        let parsed = crate::parse_one(sql, DialectType::DuckDB).unwrap();
+        let Expression::Select(select) = parsed else {
+            panic!("expected SELECT for {sql}");
+        };
+        select.expressions[0].clone()
+    }
+
+    /// The (table, column) pair a consumer gets from the obvious "what columns
+    /// does this query reference?" walk.
+    fn column_pairs(expr: &Expression) -> Vec<(Option<String>, String)> {
+        expr.find_all(|node| matches!(node, Expression::Column(_)))
+            .into_iter()
+            .map(|node| {
+                let Expression::Column(column) = node else {
+                    unreachable!()
+                };
+                (
+                    column.table.as_ref().map(|table| table.name.clone()),
+                    column.name.name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn schema_qualified_column_keeps_the_real_table_and_column() {
+        let expr = projection("SELECT raw.orders.order_id FROM raw.orders");
+
+        let Expression::Column(column) = &expr else {
+            panic!("expected a Column, got {expr:?}");
+        };
+        assert_eq!(column.name.name, "order_id");
+        assert_eq!(column.table.as_ref().unwrap().name, "orders");
+        assert_eq!(column.schema.as_ref().unwrap().name, "raw");
+        assert!(column.catalog.is_none());
+
+        // Not `("raw", "orders")` — the pair a Dot chain used to report.
+        assert_eq!(
+            column_pairs(&expr),
+            vec![(Some("orders".to_string()), "order_id".to_string())]
+        );
+    }
+
+    #[test]
+    fn catalog_qualified_column_fills_every_qualifier_slot() {
+        let expr = projection("SELECT db.raw.orders.order_id FROM db.raw.orders");
+
+        let Expression::Column(column) = &expr else {
+            panic!("expected a Column, got {expr:?}");
+        };
+        assert_eq!(column.name.name, "order_id");
+        assert_eq!(column.table.as_ref().unwrap().name, "orders");
+        assert_eq!(column.schema.as_ref().unwrap().name, "raw");
+        assert_eq!(column.catalog.as_ref().unwrap().name, "db");
+        assert_eq!(column.dotted_name(), "db.raw.orders.order_id");
+    }
+
+    #[test]
+    fn a_fifth_part_is_member_access_on_the_column() {
+        // Four parts is all a name can carry, so `e` is a field of the value at
+        // `a.b.c.d` — a struct member, not a further qualifier.
+        let expr = projection("SELECT a.b.c.d.e FROM t");
+
+        let Expression::Dot(dot) = &expr else {
+            panic!("expected a Dot, got {expr:?}");
+        };
+        assert_eq!(dot.field.name, "e");
+        let Expression::Column(column) = &dot.this else {
+            panic!("expected a column-backed Dot, got {:?}", dot.this);
+        };
+        assert_eq!(column.dotted_name(), "a.b.c.d");
+    }
+
+    #[test]
+    fn qualified_references_round_trip() {
+        for sql in [
+            "SELECT order_id FROM orders",
+            "SELECT orders.order_id FROM raw.orders",
+            "SELECT raw.orders.order_id FROM raw.orders",
+            "SELECT db.raw.orders.order_id FROM db.raw.orders",
+            "SELECT a.b.c.d.e FROM t",
+            "SELECT \"raw\".\"orders\".\"order id\" FROM raw.orders",
+            "SELECT db.raw.orders.* FROM db.raw.orders",
+            // Rendered by hand in the generator, once per context: aliases and
+            // the two sides of a binary operator.
+            "SELECT db.raw.orders.order_id AS id FROM db.raw.orders",
+            "SELECT 1 FROM db.raw.orders WHERE db.raw.orders.a = db.raw.orders.b",
+            "SELECT db.raw.orders.a + db.raw.orders.b FROM db.raw.orders",
+        ] {
+            assert_eq!(
+                crate::transpile(sql, DialectType::DuckDB, DialectType::DuckDB).unwrap(),
+                vec![sql],
+                "round-trip changed {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_numeric_part_stays_member_access() {
+        // ClickHouse tuple indexing: `t.1` reads a field of `t`, and `t.c.1` a
+        // field of `t.c`. Neither part is a name qualifier.
+        let parsed = crate::parse_one("SELECT t.c.1 FROM t", DialectType::ClickHouse).unwrap();
+        let Expression::Select(select) = &parsed else {
+            panic!("expected SELECT");
+        };
+        let Expression::Dot(dot) = &select.expressions[0] else {
+            panic!("expected a Dot, got {:?}", select.expressions[0]);
+        };
+        assert_eq!(dot.field.name, "1");
+        let Expression::Column(column) = &dot.this else {
+            panic!("expected a column-backed Dot, got {:?}", dot.this);
+        };
+        assert_eq!(column.dotted_name(), "t.c");
+    }
+
+    #[test]
+    fn a_join_marked_column_is_complete() {
+        // `t.c(+)` is a whole Oracle reference; a part after it is access into
+        // the value, so it must not shift the marked column's qualifiers.
+        let parsed = crate::parse_one("SELECT t.c(+).f FROM t", DialectType::Oracle).unwrap();
+        let Expression::Select(select) = &parsed else {
+            panic!("expected SELECT");
+        };
+        let Expression::Dot(dot) = &select.expressions[0] else {
+            panic!("expected a Dot, got {:?}", select.expressions[0]);
+        };
+        let Expression::Column(column) = &dot.this else {
+            panic!("expected a column-backed Dot, got {:?}", dot.this);
+        };
+        assert!(column.join_mark);
+        assert_eq!(column.dotted_name(), "t.c");
+        assert_eq!(dot.field.name, "f");
     }
 }

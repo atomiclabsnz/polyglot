@@ -1238,6 +1238,8 @@ pub(super) fn rewrite(
                             let u_col = Expression::Column(Box::new(crate::expressions::Column {
                                 name: u_id.clone(),
                                 table: None,
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,
@@ -1895,6 +1897,8 @@ pub(super) fn rewrite_unnest_expansion(
             Expression::boxed_column(Column {
                 name: Identifier::new(name.to_string()),
                 table: Some(Identifier::new(tbl.to_string())),
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
