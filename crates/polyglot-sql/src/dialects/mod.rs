@@ -8772,6 +8772,8 @@ impl Dialect {
                     Expression::boxed_column(Column {
                         name: Identifier::new(&unit_str),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -8851,6 +8853,8 @@ impl Dialect {
                     Expression::boxed_column(Column {
                         name: Identifier::new(&unit_str),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -8860,6 +8864,8 @@ impl Dialect {
                         this: Expression::boxed_column(Column {
                             name: Identifier::new(&alias_name),
                             table: None,
+                            schema: None,
+                            catalog: None,
                             join_mark: false,
                             trailing_comments: vec![],
                             span: None,
@@ -9080,6 +9086,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9152,6 +9160,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9161,6 +9171,8 @@ impl Dialect {
                     this: Expression::boxed_column(Column {
                         name: Identifier::new(&col_name),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,
@@ -9260,6 +9272,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9323,6 +9337,8 @@ impl Dialect {
                 Expression::boxed_column(Column {
                     name: Identifier::new(&unit_str),
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: vec![],
                     span: None,
@@ -9332,6 +9348,8 @@ impl Dialect {
                     this: Expression::boxed_column(Column {
                         name: Identifier::new(col_name),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: vec![],
                         span: None,

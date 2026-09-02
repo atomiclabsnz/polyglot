@@ -969,6 +969,8 @@ pub(super) fn normalize(
                                                 crate::expressions::Column {
                                                     name: t.name.clone(),
                                                     table: Some(schema.clone()),
+                                                    schema: None,
+                                                    catalog: None,
                                                     join_mark: false,
                                                     trailing_comments: vec![],
                                                     span: None,

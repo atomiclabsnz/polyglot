@@ -1143,6 +1143,8 @@ impl DialectImpl for DuckDBDialect {
                     this: Expression::boxed_column(Column {
                         name: Identifier::new(col_name),
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: false,
                         trailing_comments: Vec::new(),
                         span: None,
@@ -1186,6 +1188,8 @@ impl DialectImpl for DuckDBDialect {
                                             Some(Expression::boxed_column(Column {
                                                 name: Identifier::new(parts[1]),
                                                 table: Some(Identifier::new(parts[0])),
+                                                schema: None,
+                                                catalog: None,
                                                 join_mark: false,
                                                 trailing_comments: Vec::new(),
                                                 span: None,
@@ -1195,6 +1199,8 @@ impl DialectImpl for DuckDBDialect {
                                             Some(Expression::boxed_column(Column {
                                                 name: Identifier::new(s.as_str()),
                                                 table: None,
+                                                schema: None,
+                                                catalog: None,
                                                 join_mark: false,
                                                 trailing_comments: Vec::new(),
                                                 span: None,
@@ -1726,6 +1732,8 @@ impl DuckDBDialect {
                             this: Expression::boxed_column(Column {
                                 table: None,
                                 name: Identifier::new("_u".to_string()),
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,
@@ -6269,6 +6277,8 @@ impl DuckDBDialect {
                 let k_ref = Expression::boxed_column(Column {
                     table: None,
                     name: k_ident.clone(),
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -6318,6 +6328,8 @@ impl DuckDBDialect {
                 let x_ref = Expression::boxed_column(Column {
                     table: None,
                     name: x_ident.clone(),
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -6498,6 +6510,8 @@ impl DuckDBDialect {
                 let i_ref = Expression::boxed_column(Column {
                     table: None,
                     name: i_ident.clone(),
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -6666,6 +6680,8 @@ impl DuckDBDialect {
                             Expression::boxed_column(Column {
                                 table: None,
                                 name: Identifier::new("x".to_string()),
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,

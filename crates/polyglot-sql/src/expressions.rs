@@ -1727,6 +1727,8 @@ impl Expression {
         Expression::Column(Box::new(Column {
             name: Identifier::new(name),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,
@@ -1739,6 +1741,8 @@ impl Expression {
         Expression::Column(Box::new(Column {
             name: Identifier::new(column),
             table: Some(Identifier::new(table)),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,
@@ -3370,9 +3374,14 @@ impl fmt::Display for Identifier {
     }
 }
 
-/// Represent a column reference, optionally qualified by a table name.
+/// Represent a column reference, optionally qualified by table, schema and
+/// catalog names.
 ///
-/// Renders as `name` when unqualified, or `table.name` when qualified.
+/// Renders as `name`, `table.name`, `schema.table.name`, or
+/// `catalog.schema.table.name` depending on which qualifiers are present —
+/// the same qualifier structure [`TableRef`] carries, so a reference like
+/// `raw.orders.order_id` keeps `order_id` as the column name instead of
+/// degrading into a [`DotAccess`] chain that claims a different pair.
 /// Use [`Expression::column()`] or [`Expression::qualified_column()`] for
 /// convenient construction.
 #[derive(polyglot_sql_ast_derive::AstNode, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3382,6 +3391,12 @@ pub struct Column {
     pub name: Identifier,
     /// Optional table qualifier (e.g. `t` in `t.col`).
     pub table: Option<Identifier>,
+    /// Optional schema qualifier (e.g. `raw` in `raw.orders.order_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Identifier>,
+    /// Optional catalog qualifier (e.g. `db` in `db.raw.orders.order_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<Identifier>,
     /// Oracle-style join marker (+) for outer joins
     #[serde(default)]
     pub join_mark: bool,
@@ -3397,13 +3412,102 @@ pub struct Column {
     pub inferred_type: Option<DataType>,
 }
 
+impl Column {
+    /// An unqualified column reference.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self::from_identifier(Identifier::new(name))
+    }
+
+    /// An unqualified column reference from an already-built identifier, so a
+    /// caller that has decided on quoting keeps it.
+    pub fn from_identifier(name: Identifier) -> Self {
+        Self {
+            name,
+            table: None,
+            schema: None,
+            catalog: None,
+            join_mark: false,
+            trailing_comments: Vec::new(),
+            span: None,
+            inferred_type: None,
+        }
+    }
+
+    /// The qualifier identifiers, outermost first: `[catalog, schema, table]`,
+    /// skipping any that are absent.
+    ///
+    /// A qualifier is only present when every qualifier to its right is too, so
+    /// this is `catalog.schema.table` truncated from the left.
+    pub fn qualifiers(&self) -> Vec<&Identifier> {
+        [
+            self.catalog.as_ref(),
+            self.schema.as_ref(),
+            self.table.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// The full dotted reference, outermost first: qualifiers then the column
+    /// name — e.g. `["raw", "orders", "order_id"]` for `raw.orders.order_id`.
+    pub fn parts(&self) -> Vec<&Identifier> {
+        let mut parts = self.qualifiers();
+        parts.push(&self.name);
+        parts
+    }
+
+    /// Whether another qualifier can be absorbed — i.e. fewer than the three
+    /// qualifier slots (`catalog`, `schema`, `table`) are filled.
+    pub fn can_absorb_qualifier(&self) -> bool {
+        self.catalog.is_none()
+    }
+
+    /// The dotted reference as written, e.g. `raw.orders.order_id`. Identifier
+    /// quoting is not reproduced — this is a name, not SQL.
+    pub fn dotted_name(&self) -> String {
+        let mut name = String::new();
+        for part in self.parts() {
+            if !name.is_empty() {
+                name.push('.');
+            }
+            name.push_str(&part.name);
+        }
+        name
+    }
+
+    /// Drop every qualifier, leaving a bare column name.
+    pub fn unqualify(&mut self) {
+        self.table = None;
+        self.schema = None;
+        self.catalog = None;
+    }
+
+    /// Shift the existing parts one slot left and make `field` the column name,
+    /// turning `a.b` + `c` into `a.b.c` (schema `a`, table `b`, column `c`).
+    ///
+    /// Returns `false` and leaves the column untouched when all four slots are
+    /// already filled — a fifth part is member access on the column's value,
+    /// not a further qualifier, and belongs in a [`DotAccess`].
+    pub fn absorb_qualifier(&mut self, field: Identifier) -> bool {
+        if !self.can_absorb_qualifier() {
+            return false;
+        }
+        self.catalog = self.schema.take();
+        self.schema = self.table.take();
+        self.table = Some(std::mem::replace(&mut self.name, field));
+        // The type annotation described the old name, not the new one.
+        self.inferred_type = None;
+        true
+    }
+}
+
 impl fmt::Display for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(table) = &self.table {
-            write!(f, "{}.{}", table, self.name)
-        } else {
-            write!(f, "{}", self.name)
+        for qualifier in self.qualifiers() {
+            write!(f, "{}.", qualifier)?;
         }
+        write!(f, "{}", self.name)
     }
 }
 

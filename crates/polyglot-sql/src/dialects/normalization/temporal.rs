@@ -225,6 +225,8 @@ pub(super) fn rewrite(
                             f.args[0] = Expression::Column(Box::new(crate::expressions::Column {
                                 name: Identifier::new(bare_name),
                                 table: None,
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,
@@ -1959,6 +1961,8 @@ pub(super) fn rewrite(
                                     Expression::Column(Box::new(crate::expressions::Column {
                                         name: crate::expressions::Identifier::new(unit_str),
                                         table: None,
+                                        schema: None,
+                                        catalog: None,
                                         join_mark: false,
                                         trailing_comments: Vec::new(),
                                         span: None,
@@ -2051,6 +2055,8 @@ pub(super) fn rewrite(
                                     Expression::Column(Box::new(crate::expressions::Column {
                                         name: crate::expressions::Identifier::new(unit_str),
                                         table: None,
+                                        schema: None,
+                                        catalog: None,
                                         join_mark: false,
                                         trailing_comments: Vec::new(),
                                         span: None,

@@ -575,6 +575,8 @@ pub(crate) fn append_merge_update(
                 Expression::boxed_column(Column {
                     name: column,
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,
@@ -627,6 +629,8 @@ pub(crate) fn append_merge_insert(
             Expression::boxed_column(Column {
                 name,
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,

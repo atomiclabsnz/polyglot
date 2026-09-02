@@ -173,19 +173,25 @@ fn builder_table_ref(name: &str) -> TableRef {
 pub fn col(name: &str) -> Expr {
     let parts: Vec<&str> = name.split('.').collect();
     if parts.len() >= 3 && parts.iter().all(|part| !part.is_empty()) {
-        let mut expr = Expression::boxed_column(Column {
-            name: builder_identifier(parts[1]),
-            table: Some(builder_identifier(parts[0])),
-            join_mark: false,
-            trailing_comments: Vec::new(),
-            span: None,
-            inferred_type: None,
-        });
+        // Mirror the parser: dotted parts fill the column's
+        // catalog/schema/table qualifiers, and only what no longer fits is
+        // member access on the column's value.
+        let mut column = Column::from_identifier(builder_identifier(parts[0]));
+        let mut fields = Vec::new();
+        for part in &parts[1..] {
+            let ident = builder_identifier(part);
+            if column.can_absorb_qualifier() {
+                column.absorb_qualifier(ident);
+            } else {
+                fields.push(ident);
+            }
+        }
 
-        for field in &parts[2..] {
+        let mut expr = Expression::boxed_column(column);
+        for field in fields {
             expr = Expression::Dot(Box::new(DotAccess {
                 this: expr,
-                field: builder_identifier(field),
+                field,
                 inferred_type: None,
             }));
         }
@@ -197,6 +203,8 @@ pub fn col(name: &str) -> Expr {
         Expr(Expression::boxed_column(Column {
             name: builder_identifier(column),
             table: Some(builder_identifier(table)),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,
@@ -206,6 +214,8 @@ pub fn col(name: &str) -> Expr {
         Expr(Expression::boxed_column(Column {
             name: builder_identifier(name),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: Vec::new(),
             span: None,

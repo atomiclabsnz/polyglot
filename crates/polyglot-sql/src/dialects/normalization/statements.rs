@@ -204,6 +204,8 @@ pub(super) fn normalize_root(expression: Expression, context: &NormalizationCont
                             Expression::Column(Box::new(crate::expressions::Column {
                                 name: crate::expressions::Identifier::new(n.clone()),
                                 table: None,
+                                schema: None,
+                                catalog: None,
                                 join_mark: false,
                                 trailing_comments: Vec::new(),
                                 span: None,
@@ -1375,6 +1377,8 @@ pub(super) fn apply_partitioned_by(
                 Expression::boxed_column(Column {
                     name: ident,
                     table: None,
+                    schema: None,
+                    catalog: None,
                     join_mark: false,
                     trailing_comments: Vec::new(),
                     span: None,

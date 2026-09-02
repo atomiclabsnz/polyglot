@@ -2860,6 +2860,8 @@ pub(super) fn rewrite(
                                             crate::expressions::Column {
                                                 name: crate::expressions::Identifier::new("a"),
                                                 table: None,
+                                                schema: None,
+                                                catalog: None,
                                                 join_mark: false,
                                                 trailing_comments: Vec::new(),
                                                 span: None,
@@ -2870,6 +2872,8 @@ pub(super) fn rewrite(
                                             crate::expressions::Column {
                                                 name: crate::expressions::Identifier::new("b"),
                                                 table: None,
+                                                schema: None,
+                                                catalog: None,
                                                 join_mark: false,
                                                 trailing_comments: Vec::new(),
                                                 span: None,
@@ -9990,6 +9994,8 @@ pub(super) fn rewrite(
                                         Expression::Column(Box::new(crate::expressions::Column {
                                             name: u_id.clone(),
                                             table: None,
+                                            schema: None,
+                                            catalog: None,
                                             join_mark: false,
                                             trailing_comments: Vec::new(),
                                             span: None,
@@ -11878,6 +11884,8 @@ pub(super) fn rewrite(
                                         span: None,
                                     },
                                     table: None,
+                                    schema: None,
+                                    catalog: None,
                                     join_mark: false,
                                     trailing_comments: Vec::new(),
                                     span: None,

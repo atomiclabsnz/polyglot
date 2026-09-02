@@ -761,6 +761,8 @@ fn normalize_dotted_columns_in_expression(
         let root_column = Expression::boxed_column(Column {
             name: root.clone(),
             table: Some(Identifier::new(source_name)),
+            schema: None,
+            catalog: None,
             join_mark: column.join_mark,
             trailing_comments: column.trailing_comments.clone(),
             span: column.span,
@@ -1893,6 +1895,12 @@ fn quote_identifiers_recursive(expr: &mut Expression, reserved_words: &HashSet<&
             if let Some(ref mut table) = col.table {
                 maybe_quote(table, reserved_words);
             }
+            if let Some(ref mut schema) = col.schema {
+                maybe_quote(schema, reserved_words);
+            }
+            if let Some(ref mut catalog) = col.catalog {
+                maybe_quote(catalog, reserved_words);
+            }
         }
 
         Expression::Table(table_ref) => {
@@ -2886,6 +2894,8 @@ fn create_qualified_column(name: &str, table: Option<&str>) -> Expression {
     Expression::boxed_column(Column {
         name: Identifier::new(name),
         table: table.map(Identifier::new),
+        schema: None,
+        catalog: None,
         join_mark: false,
         trailing_comments: vec![],
         span: None,
@@ -2975,6 +2985,8 @@ mod tests {
         let col = Column {
             name: Identifier::new("*"),
             table: Some(Identifier::new("t")),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -2985,6 +2997,8 @@ mod tests {
         let col2 = Column {
             name: Identifier::new("id"),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -3006,6 +3020,8 @@ mod tests {
         let col = Expression::boxed_column(Column {
             name: Identifier::new("value"),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -3054,6 +3070,16 @@ mod tests {
                  CROSS JOIN UNNEST(s.nested_items) AS expanded(item)",
                 "expanded",
                 "item",
+            ),
+            // Three parts: the struct column is itself qualified. The parser
+            // reads this as catalog-style qualification (schema `source_table`,
+            // table `composite_value`) because nothing but the schema can tell
+            // the two apart — normalization resolves it the same way it does
+            // the two-part form above.
+            (
+                "SELECT source_table.composite_value.field_value AS output_value FROM source_table",
+                "source_table",
+                "composite_value",
             ),
         ];
 
@@ -4116,6 +4142,8 @@ mod tests {
         let expr = Expression::boxed_column(Column {
             name: Identifier::new("select"),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -4134,6 +4162,8 @@ mod tests {
         let expr = Expression::boxed_column(Column {
             name: Identifier::new("my column"),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -4152,6 +4182,8 @@ mod tests {
         let expr = Expression::boxed_column(Column {
             name: Identifier::new("normal_col"),
             table: Some(Identifier::new("my_table")),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -4218,6 +4250,8 @@ mod tests {
         let inner = Expression::boxed_column(Column {
             name: Identifier::new("val"),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -4267,6 +4301,8 @@ mod tests {
         let expr = Expression::boxed_column(Column {
             name: Identifier::new("1col"),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -4358,6 +4394,8 @@ mod tests {
             this: Expression::boxed_column(Column {
                 name: Identifier::new("x"),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: vec![],
                 span: None,
@@ -4390,6 +4428,8 @@ mod tests {
             Expression::boxed_column(Column {
                 name: Identifier::new("select"),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: vec![],
                 span: None,
@@ -4398,6 +4438,8 @@ mod tests {
             Expression::boxed_column(Column {
                 name: Identifier::new("normal"),
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: vec![],
                 span: None,
@@ -4426,6 +4468,8 @@ mod tests {
         let expr = Expression::boxed_column(Column {
             name: Identifier::quoted("normal_name"),
             table: None,
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,
@@ -4450,6 +4494,8 @@ mod tests {
         select.expressions.push(Expression::boxed_column(Column {
             name: Identifier::new("order"),
             table: Some(Identifier::new("t")),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,

@@ -122,6 +122,8 @@ fn normalize_expression(expression: Expression, strategy: NormalizationStrategy)
         Expression::Column(col) => Expression::boxed_column(Column {
             name: normalize_identifier(col.name, strategy),
             table: col.table.map(|t| normalize_identifier(t, strategy)),
+            schema: col.schema.map(|s| normalize_identifier(s, strategy)),
+            catalog: col.catalog.map(|c| normalize_identifier(c, strategy)),
             join_mark: col.join_mark,
             trailing_comments: col.trailing_comments,
             span: None,
@@ -440,6 +442,8 @@ mod tests {
         let col = Expression::boxed_column(Column {
             name: Identifier::new("MyColumn"),
             table: Some(Identifier::new("MyTable")),
+            schema: None,
+            catalog: None,
             join_mark: false,
             trailing_comments: vec![],
             span: None,

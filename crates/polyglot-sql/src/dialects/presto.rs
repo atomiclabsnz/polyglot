@@ -279,6 +279,8 @@ impl PrestoDialect {
                     Expression::boxed_column(Column {
                         name: c.name,
                         table: None,
+                        schema: None,
+                        catalog: None,
                         join_mark: c.join_mark,
                         trailing_comments: c.trailing_comments,
                         span: None,
@@ -292,6 +294,8 @@ impl PrestoDialect {
             Expression::Dot(d) => Expression::boxed_column(Column {
                 name: d.field,
                 table: None,
+                schema: None,
+                catalog: None,
                 join_mark: false,
                 trailing_comments: Vec::new(),
                 span: None,
