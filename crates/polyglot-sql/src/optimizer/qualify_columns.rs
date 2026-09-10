@@ -14,6 +14,7 @@ use crate::expressions::{
 use crate::resolver::{Resolver, ResolverError};
 use crate::schema::{normalize_name, Schema};
 use crate::scope::{build_scope, traverse_scope, Scope};
+use crate::traversal::ExpressionWalk;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -98,6 +99,293 @@ impl QualifyColumnsOptions {
     }
 }
 
+/// Every CTE a statement declares, bound to the columns it projects.
+///
+/// [`qualify_columns`] qualifies each `SELECT` in a statement on its own, against a
+/// scope built from that node alone. A CTE *body* carries no `WITH` of its own, so in
+/// `WITH j AS (…), b AS (SELECT half FROM j) SELECT half FROM b` the body of `b` is
+/// qualified with `j` bound to nothing at all: `half` cannot be attributed to `j`, and
+/// resolution falls through to [`Resolver::find_column_in_outer_schema_tables`], which
+/// looks for a *base table* carrying the name. That guess is silently wrong when
+/// exactly one relation in the schema has the column (the column is qualified with a
+/// relation the query does not read), and is `Unknown column` when two do — a query
+/// every warehouse runs, refused before it can be executed.
+///
+/// Binding each CTE's projection under its name gives that scope the one relation the
+/// column can actually come from. Collected for the whole statement rather than per
+/// lexical scope — a nested `WITH` is reached by the same walk.
+///
+/// A name is bound **only where the schema does not already bind it**. A CTE does shadow
+/// a relation of the same name in SQL, but this view is keyed by name and applies to
+/// every `SELECT` in the statement — *including the CTE body that defines the name*. So
+/// shadowing here would refuse the commonest shape there is: in
+/// `WITH orders AS (SELECT id FROM orders WHERE status = 'x')` the body's `status` is not
+/// one of the columns the CTE publishes, and the body would be qualified against them.
+/// Deferring to the schema keeps that working; what it leaves unfixed is narrower — a CTE
+/// that shadows a relation *and* renames a column, read from a nested query, still
+/// resolves against the relation. Fixing that needs a lexically scoped binding, not a
+/// wider overlay.
+struct CteSchemaView<'a> {
+    inner: &'a dyn Schema,
+    /// CTE name → the columns its body projects. `["*"]` means "a width this pass could
+    /// not determine", which the resolver already treats as unknown. Keyed the way
+    /// `lineage::normalize_cte_name` keys them: a quoted name keeps its case, an unquoted
+    /// one is lower-cased, so two identifiers a case-sensitive dialect keeps apart do not
+    /// collapse onto one entry.
+    ctes: HashMap<String, Vec<String>>,
+}
+
+impl<'a> CteSchemaView<'a> {
+    fn new(inner: &'a dyn Schema) -> Self {
+        Self {
+            inner,
+            ctes: HashMap::new(),
+        }
+    }
+
+    /// Bind every CTE in `with`, in declaration order, so one reading an earlier one is
+    /// resolved against names that are already known.
+    ///
+    /// The **first** binding of a name wins, and the statement's own `WITH` is bound
+    /// first: a nested `WITH` that reuses a name cannot take the outer chain's binding
+    /// away from it. (It can still lend the outer name's columns to a nested body that
+    /// meant its own — the price of a view keyed by name rather than by scope, and the
+    /// quieter of the two: the nested body reads its own `WITH` through the scope, not
+    /// through this view, whenever it is the query's own `FROM` that names it.)
+    fn bind(&mut self, with: &With) {
+        for cte in &with.ctes {
+            let name = cte_key(&cte.alias);
+            if self.ctes.contains_key(&name) {
+                continue;
+            }
+            let columns = if cte.columns.is_empty() {
+                cte_body_columns(&cte.this, self)
+            } else {
+                cte.columns.iter().map(|c| c.name.clone()).collect()
+            };
+            self.ctes.insert(name, columns);
+        }
+    }
+
+    /// The columns bound under `table`, if any CTE binds it.
+    fn cte_columns(&self, table: &str) -> Option<&Vec<String>> {
+        self.ctes
+            .get(table)
+            .or_else(|| self.ctes.get(&table.to_ascii_lowercase()))
+    }
+}
+
+/// A CTE's key in the view — quoted names keep their case, as `lineage` keys them.
+fn cte_key(alias: &Identifier) -> String {
+    if alias.quoted {
+        alias.name.clone()
+    } else {
+        alias.name.to_lowercase()
+    }
+}
+
+impl Schema for CteSchemaView<'_> {
+    fn dialect(&self) -> Option<DialectType> {
+        self.inner.dialect()
+    }
+
+    fn add_table(
+        &mut self,
+        _table: &str,
+        _columns: &[(String, crate::expressions::DataType)],
+        _dialect: Option<DialectType>,
+    ) -> crate::schema::SchemaResult<()> {
+        // The view is a read-only overlay over the caller's schema for the length of
+        // one qualification; a writer must own the schema it writes to.
+        Err(crate::schema::SchemaError::InvalidStructure(
+            "cannot add a table to a CTE schema view".to_string(),
+        ))
+    }
+
+    fn column_names(&self, table: &str) -> crate::schema::SchemaResult<Vec<String>> {
+        // The schema first, deliberately — see the type doc: a name-keyed overlay that
+        // shadowed a relation would shadow it inside the CTE body that reads it too.
+        match self.inner.column_names(table) {
+            Ok(columns) => Ok(columns),
+            Err(err) => match self.cte_columns(table) {
+                Some(columns) => Ok(columns.clone()),
+                None => Err(err),
+            },
+        }
+    }
+
+    fn get_column_type(
+        &self,
+        table: &str,
+        column: &str,
+    ) -> crate::schema::SchemaResult<crate::expressions::DataType> {
+        // A CTE's column types are not known here — only its names. Callers that need
+        // types run inference, which binds CTEs itself.
+        self.inner.get_column_type(table, column)
+    }
+
+    fn has_column(&self, table: &str, column: &str) -> bool {
+        // Delegate for anything the schema knows: it matches names the way its own
+        // dialect normalizes them, and it knows which columns are visible.
+        if self.inner.column_names(table).is_ok() {
+            return self.inner.has_column(table, column);
+        }
+        self.cte_columns(table)
+            .is_some_and(|columns| columns.iter().any(|name| name.eq_ignore_ascii_case(column)))
+    }
+
+    fn supported_table_args(&self) -> &[&str] {
+        self.inner.supported_table_args()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    fn depth(&self) -> usize {
+        self.inner.depth()
+    }
+
+    fn find_tables_for_column(&self, column: &str) -> Vec<String> {
+        // Deliberately schema-only: this answers "which *outer* relation could a column
+        // belong to" for correlated references. A CTE is in scope by name, never by a
+        // search across everything the statement declares.
+        self.inner.find_tables_for_column(column)
+    }
+}
+
+/// Collect what each CTE in `expression` projects.
+///
+/// The statement's own `WITH` is bound first, then any nested one, so a name declared
+/// twice keeps the outermost reading — and a name two `WITH`s give *different* columns is
+/// bound to neither, which leaves it resolving exactly as it did before this pass existed.
+///
+/// Each body is qualified against the view built so far, which is what expands a
+/// `SELECT *` inside a CTE to the columns it stands for. A body that does not qualify
+/// (a correlated reference, an unbound relation) falls back to the names its projections
+/// spell, and one that spells none is bound as unknown-width.
+fn collect_cte_columns<'a>(expression: &Expression, schema: &'a dyn Schema) -> CteSchemaView<'a> {
+    let mut view = CteSchemaView::new(schema);
+    if let Some(with) = with_of(expression) {
+        view.bind(with);
+    }
+    // `find_all` yields this node too, and its `WITH` is already bound above.
+    let nested: Vec<&With> = expression
+        .find_all(|node| !std::ptr::eq(node, expression) && with_of(node).is_some())
+        .into_iter()
+        .filter_map(with_of)
+        .collect();
+    for with in nested {
+        view.bind(with);
+    }
+    view
+}
+
+/// The columns a CTE body projects.
+///
+/// The projection list names them, so this reads the list rather than qualifying the body
+/// — qualification would re-walk (and clone) every nested body once per enclosing `WITH`,
+/// which is cubic in nesting depth on machine-generated SQL. A star is the one shape the
+/// list cannot answer on its own, and it is expanded through the same resolver the
+/// qualifier uses, against the view built so far. Anything this cannot read exactly — a
+/// star over a source of unknown width, or one carrying `EXCLUDE`/`REPLACE`/`RENAME` —
+/// binds the CTE as unknown-width, which the resolver already tolerates; a partial list
+/// would be worse than none.
+fn cte_body_columns(body: &Expression, view: &CteSchemaView<'_>) -> Vec<String> {
+    body_columns(body, view).unwrap_or_else(|| vec!["*".to_string()])
+}
+
+/// The names a query publishes, or `None` when they cannot be read exactly. A set
+/// operation takes its left arm's names, as every dialect does; a projection that spells
+/// no name at all is left out, which is how [`Resolver`] reads a CTE's columns everywhere
+/// else.
+fn body_columns(query: &Expression, view: &CteSchemaView<'_>) -> Option<Vec<String>> {
+    let select = match query {
+        Expression::Select(select) => select,
+        Expression::Union(set_op) => return body_columns(&set_op.left, view),
+        Expression::Intersect(set_op) => return body_columns(&set_op.left, view),
+        Expression::Except(set_op) => return body_columns(&set_op.left, view),
+        Expression::Paren(paren) => return body_columns(&paren.this, view),
+        Expression::Subquery(subquery) => return body_columns(&subquery.this, view),
+        _ => return None,
+    };
+
+    // Only built when a star needs expanding: the common body spells every name.
+    let mut sources: Option<StarSources<'_>> = None;
+    let mut names = Vec::new();
+    for expr in &select.expressions {
+        match expr {
+            Expression::Star(star) => {
+                if star.except.is_some() || star.replace.is_some() || star.rename.is_some() {
+                    return None;
+                }
+                let sources = sources.get_or_insert_with(|| StarSources::new(query, select, view));
+                names.extend(sources.columns(star.table.as_ref().map(|t| t.name.as_str()))?);
+            }
+            // `t.*` parses as a column named `*` carrying its qualifier.
+            Expression::Column(col) if is_star_column(col) => {
+                let sources = sources.get_or_insert_with(|| StarSources::new(query, select, view));
+                names.extend(sources.columns(col.table.as_ref().map(|t| t.name.as_str()))?);
+            }
+            Expression::Alias(alias) => names.push(alias.alias.name.clone()),
+            Expression::Column(col) => names.push(col.name.name.clone()),
+            Expression::Identifier(id) => names.push(id.name.clone()),
+            _ => {}
+        }
+    }
+    (!names.is_empty()).then_some(names)
+}
+
+/// The sources a star in one `SELECT` stands for, resolved on demand.
+struct StarSources<'a> {
+    scope: Scope,
+    ordered: Vec<String>,
+    schema: &'a CteSchemaView<'a>,
+}
+
+impl<'a> StarSources<'a> {
+    fn new(query: &Expression, select: &Select, schema: &'a CteSchemaView<'a>) -> Self {
+        Self {
+            scope: build_scope(query),
+            ordered: get_ordered_source_names(select),
+            schema,
+        }
+    }
+
+    /// The columns `table.*` stands for, or every source's in `FROM`/`JOIN` order for a
+    /// bare `*`. `None` when a source's width is not known here.
+    fn columns(&self, table: Option<&str>) -> Option<Vec<String>> {
+        let mut resolver = Resolver::new(&self.scope, self.schema, false);
+        let mut columns = Vec::new();
+        for source in &self.ordered {
+            if table.is_some_and(|table| !table.eq_ignore_ascii_case(source)) {
+                continue;
+            }
+            let source_columns = resolver.get_source_columns(source).ok()?;
+            if source_columns.is_empty() || source_columns.iter().any(|column| column == "*") {
+                return None;
+            }
+            columns.extend(source_columns);
+        }
+        (!columns.is_empty()).then_some(columns)
+    }
+}
+
+/// The `WITH` a node carries, whatever kind of statement it is.
+fn with_of(expression: &Expression) -> Option<&With> {
+    match expression {
+        Expression::Select(select) => select.with.as_ref(),
+        Expression::Union(set_op) => set_op.with.as_ref(),
+        Expression::Intersect(set_op) => set_op.with.as_ref(),
+        Expression::Except(set_op) => set_op.with.as_ref(),
+        Expression::Insert(insert) => insert.with.as_ref(),
+        Expression::Update(update) => update.with.as_ref(),
+        Expression::Delete(delete) => delete.with.as_ref(),
+        Expression::CreateTable(create) => create.with_cte.as_ref(),
+        _ => None,
+    }
+}
+
 /// Rewrite SQL AST to have fully qualified columns.
 ///
 /// # Example
@@ -113,6 +401,21 @@ impl QualifyColumnsOptions {
 /// # Returns
 /// The qualified expression
 pub fn qualify_columns(
+    expression: Expression,
+    schema: &dyn Schema,
+    options: &QualifyColumnsOptions,
+) -> QualifyColumnsResult<Expression> {
+    // What the statement's own CTEs project, so that a query nested inside it — a CTE
+    // body reading an earlier CTE, a derived table, a scalar subquery — resolves a read
+    // of one against the CTE rather than guessing at a base table (see [`CteSchemaView`]).
+    let view = collect_cte_columns(&expression, schema);
+    if view.ctes.is_empty() {
+        return qualify_columns_impl(expression, schema, options);
+    }
+    qualify_columns_impl(expression, &view, options)
+}
+
+fn qualify_columns_impl(
     expression: Expression,
     schema: &dyn Schema,
     options: &QualifyColumnsOptions,
@@ -1118,7 +1421,13 @@ fn qualify_single_column(
         if !scope.sources.contains_key(table_name) {
             // Allow correlated references: if the table exists in the schema
             // but not in the current scope, it may be referencing an outer scope
-            // (e.g., in a correlated scalar subquery).
+            // (e.g., in a correlated scalar subquery). A CTE name resolves here too now
+            // that the schema view binds one, which widens this: a column qualified with
+            // a CTE the query does not read is no longer refused. Checking the columns
+            // instead is not available — an outer `SELECT` re-qualifies the columns
+            // inside its own subqueries, where the same name can mean another `WITH`'s
+            // CTE, so the check turns valid SQL into `Unknown column`. A missed refusal
+            // is the cheaper side of that trade.
             if resolver.table_exists_in_schema(table_name) {
                 return Ok(());
             }
@@ -3030,6 +3339,276 @@ mod tests {
         let aliased = create_alias(col, "total");
         let sql = gen(&aliased);
         assert!(sql.contains("AS") || sql.contains("total"));
+    }
+
+    /// A query reads a CTE it names in its `FROM`, not every CTE the statement
+    /// declares (ferrion#345).
+    ///
+    /// `WITH j AS (…), b AS (SELECT half FROM j) SELECT half FROM b` reads `half` from
+    /// `b` alone; `j` is a name `b` could read, not a source of the outer body. Binding
+    /// every declared CTE as a source made `half` ambiguous between `j` and `b`, so the
+    /// resolver fell back to a schema-wide search: a query the warehouse runs was
+    /// refused as `Unknown column` when two relations carried the name, and qualified
+    /// with a relation it does not read when exactly one did.
+    #[test]
+    fn test_a_declared_cte_is_not_a_source_of_the_body_that_declares_it() {
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "cal",
+                &[
+                    ("id".into(), DataType::BigInt { length: None }),
+                    ("half".into(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+        schema
+            .add_table(
+                "inv",
+                &[
+                    ("id".into(), DataType::BigInt { length: None }),
+                    ("half".into(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let options = QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB);
+        let qualified = qualify_columns(
+            parse(
+                "WITH j AS (SELECT cal.half AS half FROM inv JOIN cal ON cal.id = inv.id), \
+                 b AS (SELECT half AS half FROM j) \
+                 SELECT half AS half FROM b",
+            ),
+            &schema,
+            &options,
+        )
+        .expect("a query duckdb runs must qualify");
+
+        let sql = gen(&qualified);
+        assert!(
+            sql.contains("SELECT b.half AS half FROM b"),
+            "the body reads `b`, the only source it names: {sql}"
+        );
+        assert!(
+            sql.contains("SELECT j.half AS half FROM j"),
+            "and the second CTE reads the first: {sql}"
+        );
+    }
+
+    /// A CTE body resolves a read of an earlier CTE against that CTE (ferrion#345).
+    ///
+    /// Each `SELECT` is qualified against a scope built from that node alone, and a CTE
+    /// body carries no `WITH` of its own, so the CTE it reads used to be bound to
+    /// nothing: the column fell through to a search for a *base table* carrying the
+    /// name. [`CteSchemaView`] binds what each CTE projects, including a name no base
+    /// table has (`1 AS total`) and the width of a `SELECT *`.
+    #[test]
+    fn test_a_cte_body_resolves_a_read_of_an_earlier_cte() {
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "t",
+                &[
+                    ("id".into(), DataType::BigInt { length: None }),
+                    ("label".into(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let options = QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB);
+        let cases = [
+            // A computed name no relation in the schema carries.
+            (
+                "WITH j AS (SELECT 1 AS total FROM t), b AS (SELECT total AS total FROM j) \
+                 SELECT total AS total FROM b",
+                "SELECT j.total AS total FROM j",
+            ),
+            // A star inside the second CTE takes the first CTE's width.
+            (
+                "WITH j AS (SELECT id, label FROM t), b AS (SELECT * FROM j) SELECT id FROM b",
+                "SELECT j.id AS id, j.label AS label FROM j",
+            ),
+            // A chain: each link reads the one before it, not the base table.
+            (
+                "WITH a AS (SELECT id FROM t), b AS (SELECT id FROM a), c AS (SELECT id FROM b) \
+                 SELECT id FROM c",
+                "SELECT b.id AS id FROM b",
+            ),
+        ];
+        for (sql, expected) in cases {
+            let qualified =
+                qualify_columns(parse(sql), &schema, &options).expect("qualifies: {sql}");
+            let generated = gen(&qualified);
+            assert!(
+                generated.contains(expected),
+                "expected {expected:?} in {generated:?} (from {sql:?})"
+            );
+        }
+    }
+
+    /// A nested `WITH` that reuses an outer CTE's name does not take the outer chain's
+    /// binding away from it. The first binding of a name wins, and the statement's own
+    /// `WITH` is bound first.
+    #[test]
+    fn test_a_nested_with_reusing_a_name_leaves_the_outer_chain_resolved() {
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "t",
+                &[("id".into(), DataType::BigInt { length: None })],
+                None,
+            )
+            .expect("schema setup");
+
+        let options = QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB);
+        let qualified = qualify_columns(
+            parse(
+                "WITH j AS (SELECT 1 AS total FROM t), b AS (SELECT total FROM j) \
+                 SELECT total FROM b \
+                 WHERE EXISTS (WITH j AS (SELECT 2 AS other FROM t) SELECT other FROM j)",
+            ),
+            &schema,
+            &options,
+        )
+        .expect("the outer chain resolves even though the subquery reuses `j`");
+
+        assert!(
+            gen(&qualified).contains("b AS (SELECT j.total AS total FROM j)"),
+            "{}",
+            gen(&qualified)
+        );
+    }
+
+    /// A CTE name now resolves as a relation for a *qualified* reference, which widens
+    /// what `qualify_columns` accepts: `b.nope` names a relation the query does not read,
+    /// and is no longer refused.
+    ///
+    /// Pinned rather than fixed. The check that would refuse it — compare the column
+    /// against the named relation's columns — fires inside subqueries too, where an outer
+    /// `SELECT` re-qualifies what its own `WHERE` contains and a `WITH` of the subquery's
+    /// own can bind the same name to different columns. That turns valid SQL into
+    /// `Unknown column`, which is the failure this whole change exists to remove.
+    #[test]
+    fn test_a_cte_name_resolves_as_a_relation_for_a_qualified_reference() {
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "t",
+                &[
+                    ("id".into(), DataType::BigInt { length: None }),
+                    ("label".into(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let options = QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB);
+        let qualified = qualify_columns(
+            parse("WITH b AS (SELECT id FROM t) SELECT b.nope FROM t"),
+            &schema,
+            &options,
+        )
+        .expect("accepted: `b` resolves as a relation, and its columns are not checked here");
+        assert!(gen(&qualified).ends_with("SELECT b.nope AS nope FROM t"));
+
+        // What must not widen: a qualifier that names nothing at all is still refused.
+        let err = qualify_columns(parse("SELECT nosuch.id FROM t"), &schema, &options)
+            .expect_err("an unknown qualifier is still an error");
+        assert!(
+            matches!(&err, QualifyColumnsError::UnknownTable(name) if name == "nosuch"),
+            "{err:?}"
+        );
+    }
+
+    /// A CTE named after the relation it reads — a routine dbt idiom — keeps working, and
+    /// the query that declares it still gets the CTE's own columns.
+    ///
+    /// This pins the side [`CteSchemaView`] deliberately comes down on. The overlay is
+    /// keyed by name and reaches every `SELECT` in the statement, the defining body
+    /// included, so a CTE name that shadowed the schema would be applied to the body that
+    /// reads the shadowed relation: `status` below is not one of the columns `t` publishes.
+    #[test]
+    fn test_a_cte_shadowing_a_relation_keeps_the_ctes_own_columns() {
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "t",
+                &[
+                    ("id".into(), DataType::BigInt { length: None }),
+                    ("label".into(), DataType::Text),
+                    ("status".into(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let options = QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB);
+        let qualified = qualify_columns(
+            // The CTE projects (label, id) — the reverse of the table's declared order —
+            // and filters on a column it does not publish.
+            parse("WITH t AS (SELECT label, id FROM t WHERE status = 'x') SELECT * FROM t"),
+            &schema,
+            &options,
+        )
+        .expect("a CTE named after the relation it reads must still qualify");
+
+        let sql = gen(&qualified);
+        assert!(
+            sql.contains("SELECT t.label AS label, t.id AS id FROM t WHERE t.status = 'x'"),
+            "the body reads the relation, filter column included: {sql}"
+        );
+        assert!(
+            sql.ends_with("SELECT t.label AS label, t.id AS id FROM t"),
+            "the outer star takes the CTE's columns, in the CTE's order: {sql}"
+        );
+    }
+
+    /// A `WITH` nested inside a subquery binds its names *there*, and this view is keyed by
+    /// name rather than by scope. Binding it as a fallback — used only where the schema has
+    /// nothing — is what keeps it from redefining a relation the rest of the statement
+    /// reads.
+    #[test]
+    fn test_a_nested_ctes_name_does_not_redefine_a_real_relation() {
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        for (table, columns) in [
+            (
+                "t",
+                vec![
+                    ("id".to_string(), DataType::BigInt { length: None }),
+                    ("label".to_string(), DataType::Text),
+                ],
+            ),
+            (
+                "u",
+                vec![("id".to_string(), DataType::BigInt { length: None })],
+            ),
+        ] {
+            schema
+                .add_table(table, &columns, None)
+                .expect("schema setup");
+        }
+
+        let options = QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB);
+        // The first CTE's body declares a `WITH` of its own, binding `t` — in scope there
+        // and nowhere else — to one renamed column. The statement's own body reads the
+        // real `t`, whose star must still expand to both of the relation's columns.
+        let qualified = qualify_columns(
+            parse(
+                "WITH renamed AS (WITH t AS (SELECT id AS k FROM u) SELECT k FROM t) \
+                 SELECT * FROM t",
+            ),
+            &schema,
+            &options,
+        )
+        .expect("qualifies");
+        let sql = gen(&qualified);
+        assert!(
+            sql.ends_with("SELECT t.id AS id, t.label AS label FROM t"),
+            "the outer query reads the relation, not the subquery's CTE: {sql}"
+        );
     }
 
     #[test]
