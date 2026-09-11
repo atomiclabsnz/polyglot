@@ -724,6 +724,45 @@ fn analyze_query_reports_transitive_base_tables() {
         .any(|relation| relation.kind == SourceKind::DerivedTable));
 }
 
+/// `relations` are the relations a query's own body reads; every CTE it *declares* is in
+/// `ctes`/`cte_facts`, and the physical tables under them are in `base_tables`.
+///
+/// This used to be blurred: `Scope::add_cte_source` put every declared CTE into the
+/// scope's `sources`, so a CTE that only another CTE reads was reported as a relation of
+/// the outer body — the same conflation that made column resolution ambiguous between two
+/// CTEs (fork #6). The three lists are now disjoint in the way their names promise.
+#[test]
+fn analyze_query_separates_the_relations_a_body_reads_from_the_ctes_it_declares() {
+    let analysis = analyze_query(
+        "WITH stg AS (SELECT customer_id FROM orders), \
+              fin AS (SELECT customer_id FROM stg) \
+         SELECT customer_id FROM fin",
+        AnalyzeQueryOptions {
+            dialect: DialectType::Generic,
+            schema: Some(schema()),
+        },
+    )
+    .unwrap();
+
+    let relations: Vec<_> = analysis
+        .relations
+        .iter()
+        .map(|relation| relation.name.as_str())
+        .collect();
+    assert_eq!(
+        relations,
+        vec!["fin"],
+        "the body reads `fin` and nothing else"
+    );
+    assert_eq!(analysis.ctes, vec!["stg".to_string(), "fin".to_string()]);
+    let base_tables: Vec<_> = analysis
+        .base_tables
+        .iter()
+        .map(|relation| relation.name.as_str())
+        .collect();
+    assert_eq!(base_tables, vec!["orders"]);
+}
+
 #[test]
 fn analyze_query_reports_structured_physical_table_identity() {
     let analysis = analyze_query(

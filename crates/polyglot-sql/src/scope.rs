@@ -267,11 +267,20 @@ impl Scope {
         self.clear_cache();
     }
 
-    /// Add a CTE source to this scope
+    /// Bind a CTE name for this scope.
+    ///
+    /// A CTE is *available* to the query that declares it, not a source of its rows:
+    /// only a `FROM`/`JOIN` that names one makes it a source (which is what
+    /// `add_table_to_scope` does, reading the binding back out of `cte_sources`).
+    /// Counting every declared CTE as a source made each name two CTEs project
+    /// ambiguous in the body — `WITH j AS (…), b AS (SELECT half FROM j) SELECT half
+    /// FROM b` reads `half` from `b` alone, but resolution saw it in both and gave up,
+    /// so the query was refused as `Unknown column` or qualified with whichever base
+    /// table happened to carry the name. sqlglot draws the same line: its `Scope.sources`
+    /// holds the relations the query reads, with `cte_sources` the names it can read.
     pub fn add_cte_source(&mut self, name: String, expression: Expression) {
         let info = SourceInfo::new(expression, true, SourceKind::Cte);
-        self.cte_sources.insert(name.clone(), info.clone());
-        self.sources.insert(name, info);
+        self.cte_sources.insert(name, info);
         self.clear_cache();
     }
 
