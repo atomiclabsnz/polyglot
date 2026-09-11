@@ -171,7 +171,7 @@ impl<'a> CteSchemaView<'a> {
     fn cte_columns(&self, table: &str) -> Option<&Vec<String>> {
         self.ctes
             .get(table)
-            .or_else(|| self.ctes.get(&table.to_ascii_lowercase()))
+            .or_else(|| self.ctes.get(&table.to_lowercase()))
     }
 }
 
@@ -313,7 +313,7 @@ fn body_columns(query: &Expression, view: &CteSchemaView<'_>) -> Option<Vec<Stri
     // Only built when a star needs expanding: the common body spells every name.
     let mut sources: Option<StarSources<'_>> = None;
     let mut names = Vec::new();
-    for expr in &select.expressions {
+    for (index, expr) in select.expressions.iter().enumerate() {
         match expr {
             Expression::Star(star) => {
                 if star.except.is_some() || star.replace.is_some() || star.rename.is_some() {
@@ -330,7 +330,10 @@ fn body_columns(query: &Expression, view: &CteSchemaView<'_>) -> Option<Vec<Stri
             Expression::Alias(alias) => names.push(alias.alias.name.clone()),
             Expression::Column(col) => names.push(col.name.name.clone()),
             Expression::Identifier(id) => names.push(id.name.clone()),
-            _ => {}
+            // A projection that spells no name of its own is still a column of the CTE:
+            // `qualify_outputs` gives it one, and this must agree with the name it gives,
+            // or a `SELECT *` over the CTE comes out a column short.
+            other => names.push(get_output_name(other).unwrap_or_else(|| format!("_col_{index}"))),
         }
     }
     (!names.is_empty()).then_some(names)
@@ -340,6 +343,8 @@ fn body_columns(query: &Expression, view: &CteSchemaView<'_>) -> Option<Vec<Stri
 struct StarSources<'a> {
     scope: Scope,
     ordered: Vec<String>,
+    /// Whether a join in this `SELECT` merges columns of the same name (`USING`/`NATURAL`).
+    coalescing_join: bool,
     schema: &'a CteSchemaView<'a>,
 }
 
@@ -348,13 +353,28 @@ impl<'a> StarSources<'a> {
         Self {
             scope: build_scope(query),
             ordered: get_ordered_source_names(select),
+            coalescing_join: select.joins.iter().any(|join| {
+                !join.using.is_empty()
+                    || matches!(
+                        join.kind,
+                        JoinKind::Natural
+                            | JoinKind::NaturalLeft
+                            | JoinKind::NaturalRight
+                            | JoinKind::NaturalFull
+                    )
+            }),
             schema,
         }
     }
 
     /// The columns `table.*` stands for, or every source's in `FROM`/`JOIN` order for a
-    /// bare `*`. `None` when a source's width is not known here.
+    /// bare `*`. `None` when a source's width is not known here, or when the join that
+    /// combines them decides the width itself: `USING`/`NATURAL` collapse the joined
+    /// columns to one apiece, and `expand_stars` — not this pass — is what knows which.
     fn columns(&self, table: Option<&str>) -> Option<Vec<String>> {
+        if self.coalescing_join {
+            return None;
+        }
         let mut resolver = Resolver::new(&self.scope, self.schema, false);
         let mut columns = Vec::new();
         for source in &self.ordered {
@@ -382,6 +402,7 @@ fn with_of(expression: &Expression) -> Option<&With> {
         Expression::Update(update) => update.with.as_ref(),
         Expression::Delete(delete) => delete.with.as_ref(),
         Expression::CreateTable(create) => create.with_cte.as_ref(),
+        Expression::Pivot(pivot) => pivot.with.as_ref(),
         _ => None,
     }
 }
@@ -3447,6 +3468,76 @@ mod tests {
                 "expected {expected:?} in {generated:?} (from {sql:?})"
             );
         }
+    }
+
+    /// The width a CTE binds is the width the qualifier gives it — including the columns
+    /// a projection does not name, and *excluding* the guesses this pass cannot make.
+    ///
+    /// Both directions were wrong and silent. A projection that spells no name of its own
+    /// was dropped, so `SELECT *` over the CTE came out a column short; and a `USING`
+    /// join's columns were counted once per side, so it came out a column too wide. A
+    /// width this pass cannot compute binds as unknown instead, which leaves the reader
+    /// exactly where it was before the binding existed.
+    #[test]
+    fn test_a_cte_binds_the_width_the_qualifier_gives_it() {
+        let mut schema = MappingSchema::with_dialect(DialectType::DuckDB);
+        schema
+            .add_table(
+                "a",
+                &[
+                    ("id".into(), DataType::BigInt { length: None }),
+                    ("x".into(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+        schema
+            .add_table(
+                "b",
+                &[
+                    ("id".into(), DataType::BigInt { length: None }),
+                    ("y".into(), DataType::Text),
+                ],
+                None,
+            )
+            .expect("schema setup");
+
+        let options = QualifyColumnsOptions::new().with_dialect(DialectType::DuckDB);
+
+        // An unnamed aggregate is a column of the CTE: `qualify_outputs` names it
+        // `_col_1`, and the star over the CTE has to stand for it too.
+        let qualified = qualify_columns(
+            parse(
+                "WITH j AS (SELECT id, count(*) FROM a GROUP BY id), k AS (SELECT * FROM j) \
+                 SELECT * FROM k",
+            ),
+            &schema,
+            &options,
+        )
+        .expect("qualifies");
+        let sql = gen(&qualified);
+        assert!(
+            sql.contains("k AS (SELECT j.id AS id, j._col_1 AS _col_1 FROM j)"),
+            "the star stands for both of the CTE's columns: {sql}"
+        );
+
+        // A `USING` join collapses `id` to one column, and which one is `expand_stars`'s
+        // answer, not this pass's: the CTE binds as unknown-width rather than twice as
+        // wide, and the reader is left with the star it wrote.
+        let qualified = qualify_columns(
+            parse(
+                "WITH j AS (SELECT * FROM a JOIN b USING (id)), k AS (SELECT * FROM j) \
+                 SELECT * FROM k",
+            ),
+            &schema,
+            &options,
+        )
+        .expect("qualifies");
+        let sql = gen(&qualified);
+        assert!(
+            sql.contains("k AS (SELECT * FROM j)"),
+            "the CTE binds as unknown-width, so the star is left standing: {sql}"
+        );
     }
 
     /// A nested `WITH` that reuses an outer CTE's name does not take the outer chain's
